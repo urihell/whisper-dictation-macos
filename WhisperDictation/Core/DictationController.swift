@@ -82,8 +82,8 @@ final class DictationController: ObservableObject {
     /// double-tap-to-latch, regardless of trigger mode.
     func triggerDown() {
         let now = Date()
-        let isDoubleTap = lastTriggerDownTime
-            .map { now.timeIntervalSince($0) <= Self.doubleTapWindow } ?? false
+        let isDoubleTap = AppSettings.shared.doubleTapEnabled
+            && (lastTriggerDownTime.map { now.timeIntervalSince($0) <= Self.doubleTapWindow } ?? false)
         lastTriggerDownTime = now
 
         if isDoubleTap {
@@ -110,6 +110,12 @@ final class DictationController: ObservableObject {
         guard !latched else { return }
         guard AppSettings.shared.triggerMode == .pushToTalk else { return }
         guard state == .recording || state == .preparing else { return }
+
+        // Without double-tap, stop immediately on release (responsive PTT).
+        guard AppSettings.shared.doubleTapEnabled else {
+            Task { await end() }
+            return
+        }
 
         // Defer the stop briefly so a quick second tap can become a double-tap
         // (latching) instead of ending the session.

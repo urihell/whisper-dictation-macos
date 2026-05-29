@@ -49,6 +49,10 @@ final class AppSettings: ObservableObject {
     @Published var useSingleKey: Bool {
         didSet { defaults.set(useSingleKey, forKey: Keys.useSingleKey) }
     }
+    /// Double-tap the trigger to start hands-free (latched) dictation.
+    @Published var doubleTapEnabled: Bool {
+        didSet { defaults.set(doubleTapEnabled, forKey: Keys.doubleTapEnabled) }
+    }
     /// Virtual key code of the single-key trigger, or -1 if unset.
     @Published var singleKeyCode: Int {
         didSet { defaults.set(singleKeyCode, forKey: Keys.singleKeyCode) }
@@ -70,6 +74,7 @@ final class AppSettings: ObservableObject {
         cleanupEnabled = defaults.object(forKey: Keys.cleanupEnabled) as? Bool ?? false
         language = defaults.string(forKey: Keys.language) ?? "auto"
         useSingleKey = defaults.object(forKey: Keys.useSingleKey) as? Bool ?? false
+        doubleTapEnabled = defaults.object(forKey: Keys.doubleTapEnabled) as? Bool ?? true
         singleKeyCode = defaults.object(forKey: Keys.singleKeyCode) as? Int ?? -1
         singleKeyLabel = defaults.string(forKey: Keys.singleKeyLabel) ?? ""
     }
@@ -82,6 +87,7 @@ final class AppSettings: ObservableObject {
         static let cleanupEnabled = "cleanupEnabled"
         static let language = "language"
         static let useSingleKey = "useSingleKey"
+        static let doubleTapEnabled = "doubleTapEnabled"
         static let singleKeyCode = "singleKeyCode"
         static let singleKeyLabel = "singleKeyLabel"
     }
