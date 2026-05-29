@@ -49,6 +49,10 @@ final class DictationController: ObservableObject {
         setState(.preparing)
         OverlayController.shared.show()
         startEscapeMonitors()
+        // Warm the on-device cleanup model now so it's hot when we stop.
+        if AppSettings.shared.cleanupEnabled {
+            SpeechCleaner.shared.prewarm()
+        }
         Task {
             do {
                 try await transcriber.start(language: AppSettings.shared.forcedLanguageCode)
