@@ -1,0 +1,15 @@
+# XcodeGen output (regenerated from project.yml)
+*.xcodeproj/
+
+# Build artifacts
+build/
+DerivedData/
+.swiftpm/
+*.xcuserstate
+
+# macOS
+.DS_Store
+
+# WhisperKit model cache (downloaded at runtime)
+Models/
+*.mlmodelc

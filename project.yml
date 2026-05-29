@@ -1,0 +1,46 @@
+name: WhisperDictation
+options:
+  bundleIdPrefix: com.udabby
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+packages:
+  WhisperKit:
+    url: https://github.com/argmaxinc/WhisperKit
+    from: "0.9.0"
+  KeyboardShortcuts:
+    url: https://github.com/sindresorhus/KeyboardShortcuts
+    from: "2.0.0"
+  LaunchAtLogin:
+    url: https://github.com/sindresorhus/LaunchAtLogin-Modern
+    from: "1.0.0"
+
+targets:
+  WhisperDictation:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - WhisperDictation
+    dependencies:
+      - package: WhisperKit
+        product: WhisperKit
+      - package: KeyboardShortcuts
+        product: KeyboardShortcuts
+      - package: LaunchAtLogin
+        product: LaunchAtLogin
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.udabby.WhisperDictation
+        PRODUCT_NAME: WhisperDictation
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.0"
+        INFOPLIST_FILE: WhisperDictation/Support/Info.plist
+        CODE_SIGN_ENTITLEMENTS: WhisperDictation/Support/WhisperDictation.entitlements
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO
+        ENABLE_HARDENED_RUNTIME: YES
+        COMBINE_HIDPI_IMAGES: YES
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
