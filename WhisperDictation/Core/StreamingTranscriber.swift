@@ -149,6 +149,17 @@ final class StreamingTranscriber: ObservableObject {
         options.skipSpecialTokens = true
         options.suppressBlank = true
 
+        // Custom vocabulary: seed the decoder prompt with the user's terms so
+        // names/jargon are recognized. Capped to stay within the prompt window.
+        let terms = AppSettings.shared.vocabularyTerms.filter { !$0.isEmpty }
+        if !terms.isEmpty {
+            var tokens = tokenizer.encode(text: " " + terms.joined(separator: ", "))
+            if tokens.count > 200 { tokens = Array(tokens.suffix(200)) }
+            options.promptTokens = tokens
+            options.usePrefillPrompt = true
+            Log.info("Vocabulary prompt: \(terms.count) terms, \(tokens.count) tokens")
+        }
+
         let streamer = AudioStreamTranscriber(
             audioEncoder: whisperKit.audioEncoder,
             featureExtractor: whisperKit.featureExtractor,
@@ -186,7 +197,20 @@ final class StreamingTranscriber: ObservableObject {
         streamTask?.cancel()
         streamTask = nil
         streamer = nil
-        return Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
+        let cleaned = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
+        return Self.applyReplacements(cleaned, AppSettings.shared.replacements)
+    }
+
+    /// Applies user replacements (heard → corrected), case-insensitively.
+    private static func applyReplacements(_ text: String, _ map: [String: String]) -> String {
+        guard !map.isEmpty else { return text }
+        var result = text
+        for (wrong, right) in map where !wrong.isEmpty {
+            result = result.replacingOccurrences(
+                of: wrong, with: right, options: [.caseInsensitive]
+            )
+        }
+        return result
     }
 
     private func apply(confirmed: String, unconfirmed: String, current: String) {

@@ -9,6 +9,9 @@ struct SettingsView: View {
     @State private var models: [String] = []
     @State private var showDeleteError = false
     @State private var deleteError: String?
+    @State private var newTerm = ""
+    @State private var newWrong = ""
+    @State private var newRight = ""
 
     var body: some View {
         TabView {
@@ -18,6 +21,8 @@ struct SettingsView: View {
                 .tabItem { Label("Model", systemImage: "brain") }
             shortcut
                 .tabItem { Label("Shortcut", systemImage: "keyboard") }
+            dictionary
+                .tabItem { Label("Dictionary", systemImage: "character.book.closed") }
         }
         .frame(width: 480)
         .padding()
@@ -199,5 +204,74 @@ struct SettingsView: View {
             }
         }
         .padding()
+    }
+
+    private var dictionary: some View {
+        Form {
+            Section("Vocabulary") {
+                HStack {
+                    TextField("Add a word, name, or acronym…", text: $newTerm)
+                        .onSubmit(addTerm)
+                    Button("Add", action: addTerm)
+                        .disabled(newTerm.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                ForEach(settings.vocabularyTerms, id: \.self) { term in
+                    HStack {
+                        Text(term)
+                        Spacer()
+                        Button(role: .destructive) {
+                            settings.vocabularyTerms.removeAll { $0 == term }
+                        } label: { Image(systemName: "trash") }
+                        .buttonStyle(.borderless)
+                    }
+                }
+                Text("Seeds the recognizer so these terms are spelled correctly. Strongly nudges, doesn't guarantee.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section("Replacements") {
+                HStack {
+                    TextField("Heard…", text: $newWrong)
+                    Image(systemName: "arrow.right").foregroundStyle(.secondary)
+                    TextField("Replace with…", text: $newRight)
+                        .onSubmit(addReplacement)
+                    Button("Add", action: addReplacement)
+                        .disabled(newWrong.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                ForEach(settings.replacements.sorted { $0.key.lowercased() < $1.key.lowercased() }, id: \.key) { pair in
+                    HStack {
+                        Text(pair.key)
+                        Image(systemName: "arrow.right").foregroundStyle(.secondary)
+                        Text(pair.value)
+                        Spacer()
+                        Button(role: .destructive) {
+                            settings.replacements[pair.key] = nil
+                        } label: { Image(systemName: "trash") }
+                        .buttonStyle(.borderless)
+                    }
+                }
+                Text("Applied after transcription, case-insensitive (e.g. “sales force” → “Salesforce”).")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding()
+    }
+
+    private func addTerm() {
+        let term = newTerm.trimmingCharacters(in: .whitespaces)
+        guard !term.isEmpty, !settings.vocabularyTerms.contains(term) else { return }
+        settings.vocabularyTerms.append(term)
+        newTerm = ""
+    }
+
+    private func addReplacement() {
+        let wrong = newWrong.trimmingCharacters(in: .whitespaces)
+        let right = newRight.trimmingCharacters(in: .whitespaces)
+        guard !wrong.isEmpty else { return }
+        settings.replacements[wrong] = right
+        newWrong = ""
+        newRight = ""
     }
 }

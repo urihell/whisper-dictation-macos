@@ -67,6 +67,16 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(singleKeyLabel, forKey: Keys.singleKeyLabel) }
     }
 
+    /// Custom vocabulary — terms seeded into the recognizer's prompt so names,
+    /// jargon, and acronyms are transcribed correctly.
+    @Published var vocabularyTerms: [String] {
+        didSet { defaults.set(vocabularyTerms, forKey: Keys.vocabularyTerms) }
+    }
+    /// Post-transcription replacements (heard text → corrected text).
+    @Published var replacements: [String: String] {
+        didSet { defaults.set(replacements, forKey: Keys.replacements) }
+    }
+
     var forcedLanguageCode: String? {
         language == "auto" ? nil : language
     }
@@ -83,6 +93,8 @@ final class AppSettings: ObservableObject {
         submitSendsReturn = defaults.object(forKey: Keys.submitSendsReturn) as? Bool ?? true
         singleKeyCode = defaults.object(forKey: Keys.singleKeyCode) as? Int ?? -1
         singleKeyLabel = defaults.string(forKey: Keys.singleKeyLabel) ?? ""
+        vocabularyTerms = defaults.stringArray(forKey: Keys.vocabularyTerms) ?? []
+        replacements = (defaults.dictionary(forKey: Keys.replacements) as? [String: String]) ?? [:]
     }
 
     private enum Keys {
@@ -97,5 +109,7 @@ final class AppSettings: ObservableObject {
         static let submitSendsReturn = "submitSendsReturn"
         static let singleKeyCode = "singleKeyCode"
         static let singleKeyLabel = "singleKeyLabel"
+        static let vocabularyTerms = "vocabularyTerms"
+        static let replacements = "replacements"
     }
 }
