@@ -6,6 +6,9 @@ import LaunchAtLogin
 struct SettingsView: View {
     @StateObject private var settings = AppSettings.shared
     @ObservedObject private var transcriber = DictationController.shared.transcriber
+    @State private var models: [String] = []
+    @State private var showDeleteError = false
+    @State private var deleteError: String?
 
     var body: some View {
         TabView {
@@ -85,11 +88,14 @@ struct SettingsView: View {
             }
 
             if let loading = transcriber.loadingModel {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
                     Text("Loading \(DictationController.friendlyModelName(loading)) in the background — current model stays active until it's ready.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Cancel") { transcriber.cancelModelLoad() }
+                        .controlSize(.small)
                 }
                 .fixedSize(horizontal: false, vertical: true)
             }
@@ -98,8 +104,62 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+
+            Section("Downloaded models") {
+                if models.isEmpty {
+                    Text("None downloaded yet.").font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(models, id: \.self) { name in
+                    HStack(spacing: 8) {
+                        Text(DictationController.friendlyModelName(name))
+                        if name == transcriber.loadedModel {
+                            Text("Active").font(.caption2).foregroundStyle(.green)
+                        }
+                        Spacer()
+                        Text(ModelManager.sizeString(of: name))
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button(role: .destructive) {
+                            delete(name)
+                        } label: {
+                            Image(systemName: "trash")
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(name == transcriber.loadedModel
+                                  || name == transcriber.loadingModel
+                                  || models.count <= 1)
+                        .help(deleteHelp(for: name))
+                    }
+                }
+            }
         }
         .padding()
+        .onAppear(perform: reloadModels)
+        .onChange(of: transcriber.loadedModel) { reloadModels() }
+        .onChange(of: transcriber.loadingModel) { reloadModels() }
+        .alert("Couldn't delete model", isPresented: $showDeleteError, presenting: deleteError) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { Text($0) }
+    }
+
+    private func reloadModels() {
+        models = ModelManager.downloadedModels()
+    }
+
+    private func delete(_ name: String) {
+        do {
+            try transcriber.deleteModel(name)
+            reloadModels()
+        } catch {
+            deleteError = error.localizedDescription
+            showDeleteError = true
+        }
+    }
+
+    private func deleteHelp(for name: String) -> String {
+        if name == transcriber.loadedModel { return "Active model — switch away to delete." }
+        if name == transcriber.loadingModel { return "Loading — cancel first." }
+        if models.count <= 1 { return "Keep at least one model." }
+        return "Delete this model from disk."
     }
 
     private var shortcut: some View {

@@ -12,6 +12,17 @@ final class StreamingTranscriber: ObservableObject {
         var errorDescription: String? { "The transcription model failed to load." }
     }
 
+    enum ModelError: LocalizedError {
+        case isActive, isLoading, lastModel
+        var errorDescription: String? {
+            switch self {
+            case .isActive: return "That model is currently in use. Switch to another model first."
+            case .isLoading: return "That model is still loading. Cancel the load first."
+            case .lastModel: return "Can't delete the only downloaded model — keep at least one."
+            }
+        }
+    }
+
     /// What the HUD shows: confirmed text plus the live tail.
     @Published private(set) var liveText: String = ""
     /// True only while blocking on the very first model load (nothing usable yet).
@@ -93,17 +104,27 @@ final class StreamingTranscriber: ObservableObject {
         }
     }
 
-    /// Where WhisperKit downloads/caches models. We override the default
-    /// (`~/Documents/huggingface`), which a non-sandboxed app cannot write to
-    /// on macOS 13+ without Documents-folder access (TCC). Application Support
-    /// is always writable.
-    private static func modelDownloadBase() -> URL {
-        let appSupport = FileManager.default
-            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
-            .first!
-            .appendingPathComponent("WhisperDictation", isDirectory: true)
-        try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
-        return appSupport
+    private static func modelDownloadBase() -> URL { ModelManager.downloadBase }
+
+    /// Cancels an in-flight background model load. Note: the underlying download
+    /// may stop, but an ANE compile already in progress can run to completion in
+    /// a system service — we just stop waiting for it and don't switch.
+    func cancelModelLoad() {
+        if let m = loadingModel { Log.info("Cancelling background load of '\(m)'") }
+        backgroundLoad?.cancel()
+        backgroundLoad = nil
+        loadingModel = nil
+    }
+
+    /// Deletes a downloaded model from disk. Refuses to delete the active model,
+    /// one that's currently loading, or the last remaining model.
+    func deleteModel(_ name: String) throws {
+        if name == loadedModelName { throw ModelError.isActive }
+        if name == loadingModel { throw ModelError.isLoading }
+        if ModelManager.downloadedModels().count <= 1 { throw ModelError.lastModel }
+        try ModelManager.delete(name)
+        Log.info("Deleted model '\(name)'")
+        objectWillChange.send()
     }
 
     /// Begins streaming transcription using the active model. If the configured
