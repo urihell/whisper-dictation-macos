@@ -6,19 +6,31 @@ struct DictationHUD: View {
     @ObservedObject var controller: DictationController
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .top, spacing: 12) {
             indicator
+                .padding(.top, 2)
 
-            Text(displayText)
-                .font(.system(size: 15, weight: .medium))
-                .foregroundStyle(.white)
-                .lineLimit(3)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            ScrollViewReader { proxy in
+                ScrollView(.vertical, showsIndicators: false) {
+                    Text(displayText)
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(.white)
+                        .multilineTextAlignment(.leading)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .id(Self.textAnchor)
+                }
+                .frame(height: 72) // ~4 lines; longer text scrolls
+                .onChange(of: displayText) {
+                    // Keep the most recent words in view as dictation grows.
+                    withAnimation(.linear(duration: 0.1)) {
+                        proxy.scrollTo(Self.textAnchor, anchor: .bottom)
+                    }
+                }
+            }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
-        .frame(width: 460, alignment: .leading)
+        .frame(width: 520)
         .background(
             RoundedRectangle(cornerRadius: 16, style: .continuous)
                 .fill(.black.opacity(0.78))
@@ -28,6 +40,8 @@ struct DictationHUD: View {
                 .strokeBorder(.white.opacity(0.12), lineWidth: 1)
         )
     }
+
+    private static let textAnchor = "hud-text"
 
     @ViewBuilder
     private var indicator: some View {

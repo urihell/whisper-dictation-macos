@@ -76,6 +76,10 @@ final class StreamingTranscriber: ObservableObject {
         options.task = .transcribe
         options.language = language
         options.detectLanguage = (language == nil)
+        // Suppress non-speech / blank output at the source. (Not setting
+        // withoutTimestamps — the streaming segment confirmation needs them.)
+        options.skipSpecialTokens = true
+        options.suppressBlank = true
 
         let streamer = AudioStreamTranscriber(
             audioEncoder: whisperKit.audioEncoder,
@@ -125,14 +129,28 @@ final class StreamingTranscriber: ObservableObject {
         liveText = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
     }
 
-    /// Strips Whisper special tokens and collapses whitespace.
+    /// Strips Whisper special tokens and non-speech annotations (e.g.
+    /// `[BLANK_AUDIO]`, `(background noise)`, `*laughs*`, `♪`), then collapses
+    /// whitespace — so only the dictated words remain.
     private static func clean(_ text: String) -> String {
-        let stripped = text.replacingOccurrences(
-            of: "<\\|[^|]*\\|>", with: "", options: .regularExpression
-        )
-        let collapsed = stripped.replacingOccurrences(
-            of: "\\s+", with: " ", options: .regularExpression
-        )
-        return collapsed.trimmingCharacters(in: .whitespacesAndNewlines)
+        var s = text
+        for pattern in nonSpeechPatterns {
+            s = s.replacingOccurrences(
+                of: pattern,
+                with: "",
+                options: [.regularExpression, .caseInsensitive]
+            )
+        }
+        s = s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    private static let nonSpeechPatterns: [String] = [
+        "<\\|[^|]*\\|>",          // Whisper special tokens, e.g. <|startoftranscript|>
+        "\\[[^\\]]*\\]",          // square-bracket tags, e.g. [BLANK_AUDIO], [SILENCE], [Music]
+        // parenthesized sound descriptions, e.g. (background noise), (upbeat music)
+        "\\([^()]*(?:audio|silence|music|noise|applause|laughter|laughs|laughing|sound|wind|static|inaudible|blank|background|coughing|breathing|sighs|sighing|chuckles|sniff|beep|ringing|footsteps)[^()]*\\)",
+        "\\*[^*]*\\*",            // asterisk actions, e.g. *laughs*
+        "[♪♫🎵🎶]",               // musical notes
+    ]
 }
