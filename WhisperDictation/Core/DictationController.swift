@@ -7,6 +7,7 @@ enum DictationState {
     case preparing   // loading model / starting the stream
     case recording   // streaming live transcription
     case transcribing // finalizing after stop
+    case cleaning    // on-device LLM cleanup
     case inserting
 }
 
@@ -37,7 +38,7 @@ final class DictationController: ObservableObject {
             begin()
         case .recording:
             Task { await end() }
-        case .preparing, .transcribing, .inserting:
+        case .preparing, .transcribing, .cleaning, .inserting:
             break // busy — ignore
         }
     }
@@ -67,9 +68,16 @@ final class DictationController: ObservableObject {
         stopEscapeMonitors()
 
         setState(.transcribing)
-        let text = await transcriber.stop()
+        var text = await transcriber.stop()
+        Log.info("end() — raw transcript: \(text.count) chars: \"\(text.prefix(80))\"")
+
+        // Optional on-device cleanup (remove self-corrections + filler).
+        if AppSettings.shared.cleanupEnabled, SpeechCleaner.isAvailable, !text.isEmpty {
+            setState(.cleaning)
+            text = await SpeechCleaner.clean(text, languageHint: AppSettings.shared.forcedLanguageCode)
+        }
+
         OverlayController.shared.hide()
-        Log.info("end() — final transcript: \(text.count) chars: \"\(text.prefix(80))\"")
 
         guard !text.isEmpty else {
             Log.info("end() — empty transcript, nothing to insert")

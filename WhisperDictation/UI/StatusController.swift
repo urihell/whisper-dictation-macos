@@ -14,6 +14,7 @@ final class StatusController: ObservableObject {
         case .preparing: return "mic.badge.plus"
         case .recording: return "mic.fill"
         case .transcribing, .inserting: return "waveform"
+        case .cleaning: return "sparkles"
         }
     }
 

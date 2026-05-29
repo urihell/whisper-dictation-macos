@@ -46,7 +46,7 @@ struct DictationHUD: View {
     @ViewBuilder
     private var indicator: some View {
         switch controller.state {
-        case .preparing:
+        case .preparing, .cleaning:
             ProgressView()
                 .controlSize(.small)
                 .tint(.white)
@@ -64,6 +64,8 @@ struct DictationHUD: View {
         switch controller.state {
         case .preparing:
             return transcriber.isModelLoading ? "Loading model…" : "Starting…"
+        case .cleaning:
+            return "Cleaning up…"
         case .transcribing, .inserting:
             return transcriber.liveText.isEmpty ? "Finishing…" : transcriber.liveText
         default:

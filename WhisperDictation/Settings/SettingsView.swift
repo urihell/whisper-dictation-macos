@@ -36,6 +36,20 @@ struct SettingsView: View {
 
             Toggle("Press Return after inserting (submit)", isOn: $settings.pressReturnAfterInsert)
 
+            VStack(alignment: .leading, spacing: 2) {
+                Toggle("Clean up speech (remove self-corrections & filler)", isOn: $settings.cleanupEnabled)
+                    .disabled(!SpeechCleaner.isAvailable)
+                if let reason = SpeechCleaner.unavailableReason {
+                    Text(reason)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text("Uses Apple's on-device model — private, adds about a second after you stop.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             LaunchAtLogin.Toggle("Launch at login")
 
             Picker("Language", selection: $settings.language) {

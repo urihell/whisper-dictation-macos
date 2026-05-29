@@ -32,6 +32,7 @@ struct MenuContent: View {
         case .preparing: return "Starting…"
         case .recording: return "Recording…"
         case .transcribing: return "Transcribing…"
+        case .cleaning: return "Cleaning up…"
         case .inserting: return "Inserting…"
         }
     }

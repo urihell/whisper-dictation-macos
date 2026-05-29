@@ -44,3 +44,6 @@ targets:
         ENABLE_HARDENED_RUNTIME: YES
         COMBINE_HIDPI_IMAGES: YES
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+        # FoundationModels (on-device LLM) is macOS 26+; weak-link so the app
+        # still launches on the macOS 14 deployment target. Usage is #available-gated.
+        OTHER_LDFLAGS: "$(inherited) -weak_framework FoundationModels"
