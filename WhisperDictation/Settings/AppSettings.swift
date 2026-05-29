@@ -72,6 +72,11 @@ final class AppSettings: ObservableObject {
     @Published var vocabularyTerms: [String] {
         didSet { defaults.set(vocabularyTerms, forKey: Keys.vocabularyTerms) }
     }
+    /// Feed the vocabulary into the decoder prompt. Off by default: it disables
+    /// WhisperKit's prefill cache, which noticeably slows live transcription.
+    @Published var vocabularyBiasing: Bool {
+        didSet { defaults.set(vocabularyBiasing, forKey: Keys.vocabularyBiasing) }
+    }
     /// Post-transcription replacements (heard text → corrected text).
     @Published var replacements: [String: String] {
         didSet { defaults.set(replacements, forKey: Keys.replacements) }
@@ -94,6 +99,7 @@ final class AppSettings: ObservableObject {
         singleKeyCode = defaults.object(forKey: Keys.singleKeyCode) as? Int ?? -1
         singleKeyLabel = defaults.string(forKey: Keys.singleKeyLabel) ?? ""
         vocabularyTerms = defaults.stringArray(forKey: Keys.vocabularyTerms) ?? []
+        vocabularyBiasing = defaults.object(forKey: Keys.vocabularyBiasing) as? Bool ?? false
         replacements = (defaults.dictionary(forKey: Keys.replacements) as? [String: String]) ?? [:]
     }
 
@@ -110,6 +116,7 @@ final class AppSettings: ObservableObject {
         static let singleKeyCode = "singleKeyCode"
         static let singleKeyLabel = "singleKeyLabel"
         static let vocabularyTerms = "vocabularyTerms"
+        static let vocabularyBiasing = "vocabularyBiasing"
         static let replacements = "replacements"
     }
 }

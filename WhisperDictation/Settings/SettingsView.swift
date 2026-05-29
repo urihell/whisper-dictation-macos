@@ -225,7 +225,8 @@ struct SettingsView: View {
                         .buttonStyle(.borderless)
                     }
                 }
-                Text("Seeds the recognizer so these terms are spelled correctly. Strongly nudges, doesn't guarantee.")
+                Toggle("Bias recognition using these terms", isOn: $settings.vocabularyBiasing)
+                Text("When on, seeds the recognizer so these terms are spelled correctly (strong nudge, not a guarantee). ⚠️ Slows live transcription — it disables a speed optimization. Off by default; Replacements below work regardless and cost nothing.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

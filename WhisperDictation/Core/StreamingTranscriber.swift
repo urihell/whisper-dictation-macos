@@ -150,14 +150,15 @@ final class StreamingTranscriber: ObservableObject {
         options.suppressBlank = true
 
         // Custom vocabulary: seed the decoder prompt with the user's terms so
-        // names/jargon are recognized. Capped to stay within the prompt window.
+        // names/jargon are recognized. Opt-in — setting promptTokens disables
+        // WhisperKit's prefill cache, which slows live streaming noticeably.
         let terms = AppSettings.shared.vocabularyTerms.filter { !$0.isEmpty }
-        if !terms.isEmpty {
+        if AppSettings.shared.vocabularyBiasing, !terms.isEmpty {
             var tokens = tokenizer.encode(text: " " + terms.joined(separator: ", "))
             if tokens.count > 200 { tokens = Array(tokens.suffix(200)) }
             options.promptTokens = tokens
             options.usePrefillPrompt = true
-            Log.info("Vocabulary prompt: \(terms.count) terms, \(tokens.count) tokens")
+            Log.info("Vocabulary prompt: \(terms.count) terms, \(tokens.count) tokens (prefill cache off)")
         }
 
         let streamer = AudioStreamTranscriber(
