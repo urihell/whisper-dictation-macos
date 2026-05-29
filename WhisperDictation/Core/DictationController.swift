@@ -27,7 +27,36 @@ final class DictationController: ObservableObject {
     private var escapeGlobalMonitor: Any?
     private var escapeLocalMonitor: Any?
 
-    private init() {}
+    // Suppresses the "switched" toast for the very first model load at launch.
+    private var announcedFirstModel = false
+
+    private init() {
+        transcriber.onModelReady = { [weak self] modelName in
+            guard let self else { return }
+            if self.announcedFirstModel {
+                OverlayController.shared.toast("Switched to \(Self.friendlyModelName(modelName))")
+            }
+            self.announcedFirstModel = true
+        }
+    }
+
+    /// Loads the configured model in the background so it's ready (or compiling)
+    /// before the first dictation. Call once at launch.
+    func preloadModel() {
+        transcriber.requestModel(AppSettings.shared.modelName)
+    }
+
+    static func friendlyModelName(_ id: String) -> String {
+        switch id {
+        case "openai_whisper-tiny": return "Tiny"
+        case "openai_whisper-base": return "Base"
+        case "openai_whisper-small": return "Small"
+        case "openai_whisper-medium": return "Medium"
+        case "openai_whisper-large-v3-v20240930_turbo_632MB": return "Large v3 Turbo"
+        case "openai_whisper-large-v3": return "Large v3"
+        default: return id
+        }
+    }
 
     var isActive: Bool { state != .idle }
 

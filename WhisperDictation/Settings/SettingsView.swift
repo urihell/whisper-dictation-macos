@@ -5,6 +5,7 @@ import LaunchAtLogin
 
 struct SettingsView: View {
     @StateObject private var settings = AppSettings.shared
+    @ObservedObject private var transcriber = DictationController.shared.transcriber
 
     var body: some View {
         TabView {
@@ -77,8 +78,23 @@ struct SettingsView: View {
                 Text("Large v3 Turbo — best for other languages, fast").tag("openai_whisper-large-v3-v20240930_turbo_632MB")
                 Text("Large v3 — most accurate, slowest").tag("openai_whisper-large-v3")
             }
+            .onChange(of: settings.modelName) {
+                // Load the new model in the background; keep using the current
+                // one until it's ready (large models take minutes to compile).
+                DictationController.shared.transcriber.requestModel(settings.modelName)
+            }
 
-            Text("Models download on first use and are cached on-device. Larger models are more accurate but slower and use more memory. For non-English (e.g. Hebrew), use Large v3 Turbo or larger — and set a specific Language below rather than Auto-detect.")
+            if let loading = transcriber.loadingModel {
+                HStack(spacing: 6) {
+                    ProgressView().controlSize(.small)
+                    Text("Loading \(DictationController.friendlyModelName(loading)) in the background — current model stays active until it's ready.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Text("Models download on first use and are cached on-device. Larger models are more accurate but slower and use more memory. The first load of a large model can take a few minutes to compile (one-time); you can keep dictating with the current model meanwhile. For non-English (e.g. Hebrew), use Large v3 Turbo or larger — and set a specific Language below rather than Auto-detect.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

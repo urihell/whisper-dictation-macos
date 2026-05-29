@@ -14,13 +14,22 @@ final class StreamingTranscriber: ObservableObject {
 
     /// What the HUD shows: confirmed text plus the live tail.
     @Published private(set) var liveText: String = ""
+    /// True only while blocking on the very first model load (nothing usable yet).
     @Published private(set) var isModelLoading = false
+    /// The currently active (usable) model, or nil before the first load.
     @Published private(set) var loadedModel: String?
+    /// The model currently loading in the background, or nil.
+    @Published private(set) var loadingModel: String?
+
+    /// Called on the main actor when a background model load finishes and that
+    /// model becomes active. The argument is the model name.
+    var onModelReady: ((String) -> Void)?
 
     private var whisperKit: WhisperKit?
     private var loadedModelName: String?
     private var streamer: AudioStreamTranscriber?
     private var streamTask: Task<Void, Never>?
+    private var backgroundLoad: Task<Void, Never>?
 
     // Latest pieces from the stream callback.
     private var confirmedText = ""
@@ -30,22 +39,58 @@ final class StreamingTranscriber: ObservableObject {
 
     var isLoaded: Bool { whisperKit != nil }
 
-    func loadIfNeeded(_ modelName: String) async throws {
-        if whisperKit != nil, loadedModelName == modelName { return }
-
-        isModelLoading = true
-        defer { isModelLoading = false }
-
+    /// Builds (and downloads/compiles if needed) a WhisperKit for `modelName`.
+    private func makeWhisperKit(_ modelName: String) async throws -> WhisperKit {
         let base = Self.modelDownloadBase()
         Log.info("Loading model '\(modelName)' (downloads on first use) into \(base.path)…")
         // `load: true` is required: WhisperKit only auto-loads (which loads the
         // tokenizer) when a modelFolder is passed. We pass downloadBase instead,
         // so without this the tokenizer stays nil and streaming can't start.
         let config = WhisperKitConfig(model: modelName, downloadBase: base, load: true)
-        whisperKit = try await WhisperKit(config)
-        loadedModelName = modelName
-        loadedModel = modelName
-        Log.info("Model '\(modelName)' loaded. tokenizer=\(whisperKit?.tokenizer != nil)")
+        let wk = try await WhisperKit(config)
+        Log.info("Model '\(modelName)' loaded. tokenizer=\(wk.tokenizer != nil)")
+        return wk
+    }
+
+    /// Loads `modelName` in the background and switches to it when ready, while
+    /// the current model stays usable. No-op if it's already active or loading.
+    func requestModel(_ modelName: String) {
+        if modelName == loadedModelName || modelName == loadingModel { return }
+        Log.info("requestModel('\(modelName)') — loading in background")
+        loadingModel = modelName
+        backgroundLoad?.cancel()
+        backgroundLoad = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let wk = try await self.makeWhisperKit(modelName)
+                if Task.isCancelled { return }
+                self.whisperKit = wk
+                self.loadedModelName = modelName
+                self.loadedModel = modelName
+                self.loadingModel = nil
+                Log.info("Switched active model to '\(modelName)'")
+                self.onModelReady?(modelName)
+            } catch {
+                self.loadingModel = nil
+                Log.error("Background model load failed for '\(modelName)': \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Ensures a usable model exists for a session. If one is already active, it
+    /// is used immediately and the desired model (if different) loads in the
+    /// background. Only blocks when nothing is loaded yet (first ever launch).
+    private func ensureUsableModel(desired: String) async throws {
+        if whisperKit == nil {
+            isModelLoading = true
+            defer { isModelLoading = false }
+            let wk = try await makeWhisperKit(desired)
+            whisperKit = wk
+            loadedModelName = desired
+            loadedModel = desired
+        } else if loadedModelName != desired {
+            requestModel(desired)
+        }
     }
 
     /// Where WhisperKit downloads/caches models. We override the default
@@ -61,9 +106,11 @@ final class StreamingTranscriber: ObservableObject {
         return appSupport
     }
 
-    /// Loads the model (if needed) and begins streaming transcription.
+    /// Begins streaming transcription using the active model. If the configured
+    /// model isn't loaded yet, the active one is used now and the new one loads
+    /// in the background (only the very first load blocks).
     func start(language: String?) async throws {
-        try await loadIfNeeded(AppSettings.shared.modelName)
+        try await ensureUsableModel(desired: AppSettings.shared.modelName)
         guard let whisperKit, let tokenizer = whisperKit.tokenizer else {
             throw TranscriberError.tokenizerUnavailable
         }
