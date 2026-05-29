@@ -1,12 +1,16 @@
 import Foundation
+import CoreGraphics
 import KeyboardShortcuts
 
 extension KeyboardShortcuts.Name {
     static let toggleDictation = Self("toggleDictation")
 }
 
-/// Wires the global dictation hotkey to the controller. The handlers branch on
-/// the current trigger mode at call time, so changing modes needs no rewiring.
+/// Wires the dictation trigger. Two styles, selectable in Settings:
+///   - Key combination → KeyboardShortcuts (modifier + key, or a function key).
+///   - Single key       → SingleKeyMonitor (one key, intercepted globally).
+/// Handlers branch on the current trigger mode at call time, so changing
+/// toggle/push-to-talk needs no rewiring.
 @MainActor
 final class HotkeyManager {
     static let shared = HotkeyManager()
@@ -14,6 +18,7 @@ final class HotkeyManager {
 
     func start() {
         KeyboardShortcuts.onKeyDown(for: .toggleDictation) {
+            guard !AppSettings.shared.useSingleKey else { return }
             switch AppSettings.shared.triggerMode {
             case .toggle:
                 DictationController.shared.toggle()
@@ -23,9 +28,22 @@ final class HotkeyManager {
         }
 
         KeyboardShortcuts.onKeyUp(for: .toggleDictation) {
+            guard !AppSettings.shared.useSingleKey else { return }
             if AppSettings.shared.triggerMode == .pushToTalk {
                 Task { await DictationController.shared.end() }
             }
+        }
+
+        reconfigure()
+    }
+
+    /// Call after the trigger style or single key changes.
+    func reconfigure() {
+        let settings = AppSettings.shared
+        if settings.useSingleKey, settings.singleKeyCode >= 0 {
+            SingleKeyMonitor.shared.start(keyCode: CGKeyCode(settings.singleKeyCode))
+        } else {
+            SingleKeyMonitor.shared.stop()
         }
     }
 }

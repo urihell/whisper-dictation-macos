@@ -40,6 +40,20 @@ final class AppSettings: ObservableObject {
         didSet { defaults.set(language, forKey: Keys.language) }
     }
 
+    /// When true, the trigger is a single key (intercepted globally) rather
+    /// than a KeyboardShortcuts key combination.
+    @Published var useSingleKey: Bool {
+        didSet { defaults.set(useSingleKey, forKey: Keys.useSingleKey) }
+    }
+    /// Virtual key code of the single-key trigger, or -1 if unset.
+    @Published var singleKeyCode: Int {
+        didSet { defaults.set(singleKeyCode, forKey: Keys.singleKeyCode) }
+    }
+    /// Human-readable label for the single-key trigger.
+    @Published var singleKeyLabel: String {
+        didSet { defaults.set(singleKeyLabel, forKey: Keys.singleKeyLabel) }
+    }
+
     var forcedLanguageCode: String? {
         language == "auto" ? nil : language
     }
@@ -50,6 +64,9 @@ final class AppSettings: ObservableObject {
         restoreClipboard = defaults.object(forKey: Keys.restoreClipboard) as? Bool ?? true
         pressReturnAfterInsert = defaults.object(forKey: Keys.pressReturn) as? Bool ?? false
         language = defaults.string(forKey: Keys.language) ?? "auto"
+        useSingleKey = defaults.object(forKey: Keys.useSingleKey) as? Bool ?? false
+        singleKeyCode = defaults.object(forKey: Keys.singleKeyCode) as? Int ?? -1
+        singleKeyLabel = defaults.string(forKey: Keys.singleKeyLabel) ?? ""
     }
 
     private enum Keys {
@@ -58,5 +75,8 @@ final class AppSettings: ObservableObject {
         static let restoreClipboard = "restoreClipboard"
         static let pressReturn = "pressReturnAfterInsert"
         static let language = "language"
+        static let useSingleKey = "useSingleKey"
+        static let singleKeyCode = "singleKeyCode"
+        static let singleKeyLabel = "singleKeyLabel"
     }
 }

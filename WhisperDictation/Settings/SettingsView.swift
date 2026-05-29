@@ -72,9 +72,26 @@ struct SettingsView: View {
 
     private var shortcut: some View {
         Form {
-            KeyboardShortcuts.Recorder("Dictation hotkey:", name: .toggleDictation)
+            Picker("Trigger style", selection: $settings.useSingleKey) {
+                Text("Key combination").tag(false)
+                Text("Single key").tag(true)
+            }
+            .pickerStyle(.radioGroup)
+            .onChange(of: settings.useSingleKey) { HotkeyManager.shared.reconfigure() }
 
-            Text("In push-to-talk mode, hold the shortcut while you speak. In toggle mode, press once to start and again to stop.")
+            if settings.useSingleKey {
+                LabeledContent("Dictation key:") {
+                    SingleKeyRecorder(settings: settings)
+                }
+                Text("Press any single key. ⚠️ While set, that key is captured system-wide and won't type its character anywhere — pick a key you don't otherwise need (a function key is safest).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                KeyboardShortcuts.Recorder("Dictation hotkey:", name: .toggleDictation)
+            }
+
+            Text("In push-to-talk mode, hold the trigger while you speak. In toggle mode, press once to start and again to stop.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
