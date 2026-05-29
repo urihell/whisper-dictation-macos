@@ -115,8 +115,11 @@ final class DictationController: ObservableObject {
         }
 
         setState(.inserting)
+        let outgoing = AppSettings.shared.rtlForRTLText
+            ? TextInserter.applyingBaseDirection(text)
+            : text
         inserter.insert(
-            text,
+            outgoing,
             restoreClipboard: AppSettings.shared.restoreClipboard,
             pressReturn: AppSettings.shared.pressReturnAfterInsert
         )

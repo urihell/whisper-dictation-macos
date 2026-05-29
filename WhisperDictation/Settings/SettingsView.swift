@@ -40,6 +40,8 @@ struct SettingsView: View {
 
             Toggle("Press Return after inserting (submit)", isOn: $settings.pressReturnAfterInsert)
 
+            Toggle("Right-to-left for Hebrew/Arabic", isOn: $settings.rtlForRTLText)
+
             VStack(alignment: .leading, spacing: 2) {
                 Toggle("Clean up speech (remove self-corrections & filler)", isOn: $settings.cleanupEnabled)
                     .disabled(!SpeechCleaner.isAvailable)
