@@ -44,9 +44,10 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("Uses Apple's on-device model — private, adds about a second after you stop.")
+                    Text("Uses Apple's on-device model — fully private, but adds several seconds after you stop (model is slow per call). Best left off unless you need correction cleanup.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
