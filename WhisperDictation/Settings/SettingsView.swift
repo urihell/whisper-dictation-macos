@@ -59,10 +59,11 @@ struct SettingsView: View {
                 Text("Base — fast, decent").tag("openai_whisper-base")
                 Text("Small — balanced").tag("openai_whisper-small")
                 Text("Medium — accurate").tag("openai_whisper-medium")
-                Text("Large v3 — best multilingual").tag("openai_whisper-large-v3")
+                Text("Large v3 Turbo — best for other languages, fast").tag("openai_whisper-large-v3-v20240930_turbo_632MB")
+                Text("Large v3 — most accurate, slowest").tag("openai_whisper-large-v3")
             }
 
-            Text("Models download on first use and are cached on-device. Larger models are more accurate but slower and use more memory.")
+            Text("Models download on first use and are cached on-device. Larger models are more accurate but slower and use more memory. For non-English (e.g. Hebrew), use Large v3 Turbo or larger — and set a specific Language below rather than Auto-detect.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
