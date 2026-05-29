@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import AppKit
 
 enum DictationState {
     case idle
@@ -20,6 +21,10 @@ final class DictationController: ObservableObject {
 
     let transcriber = StreamingTranscriber()
     private let inserter = TextInserter()
+
+    // Monitors for the Escape key, active only while dictating.
+    private var escapeGlobalMonitor: Any?
+    private var escapeLocalMonitor: Any?
 
     private init() {}
 
@@ -42,6 +47,7 @@ final class DictationController: ObservableObject {
         Log.info("begin() — preparing")
         setState(.preparing)
         OverlayController.shared.show()
+        startEscapeMonitors()
         Task {
             do {
                 try await transcriber.start(language: AppSettings.shared.forcedLanguageCode)
@@ -58,6 +64,7 @@ final class DictationController: ObservableObject {
 
     func end() async {
         guard state == .preparing || state == .recording else { return }
+        stopEscapeMonitors()
 
         setState(.transcribing)
         let text = await transcriber.stop()
@@ -79,12 +86,49 @@ final class DictationController: ObservableObject {
         setState(.idle)
     }
 
+    /// Aborts the current session and discards the transcript (Escape).
+    func cancel() async {
+        guard state == .preparing || state == .recording else { return }
+        Log.info("cancel() — discarding dictation")
+        stopEscapeMonitors()
+        _ = await transcriber.stop()
+        OverlayController.shared.hide()
+        setState(.idle)
+    }
+
+    // MARK: - Escape-to-cancel
+
+    private func startEscapeMonitors() {
+        escapeGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == 53 else { return } // Escape
+            Task { await self?.cancel() }
+        }
+        // Local monitor in case our own (HUD) window happens to be key.
+        escapeLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard event.keyCode == 53 else { return event }
+            Task { await self?.cancel() }
+            return nil
+        }
+    }
+
+    private func stopEscapeMonitors() {
+        if let escapeGlobalMonitor {
+            NSEvent.removeMonitor(escapeGlobalMonitor)
+            self.escapeGlobalMonitor = nil
+        }
+        if let escapeLocalMonitor {
+            NSEvent.removeMonitor(escapeLocalMonitor)
+            self.escapeLocalMonitor = nil
+        }
+    }
+
     private func setState(_ newState: DictationState) {
         state = newState
         StatusController.shared.state = newState
     }
 
     private func fail(_ error: Error) {
+        stopEscapeMonitors()
         lastError = error.localizedDescription
         Log.error("Dictation failed: \(error.localizedDescription)")
         setState(.idle)
