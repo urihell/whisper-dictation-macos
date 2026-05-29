@@ -31,6 +31,10 @@ final class AppSettings: ObservableObject {
     @Published var restoreClipboard: Bool {
         didSet { defaults.set(restoreClipboard, forKey: Keys.restoreClipboard) }
     }
+    /// Press Return after inserting, to submit chat boxes/search fields.
+    @Published var pressReturnAfterInsert: Bool {
+        didSet { defaults.set(pressReturnAfterInsert, forKey: Keys.pressReturn) }
+    }
     /// ISO language code, or "auto" for detection.
     @Published var language: String {
         didSet { defaults.set(language, forKey: Keys.language) }
@@ -44,6 +48,7 @@ final class AppSettings: ObservableObject {
         triggerMode = TriggerMode(rawValue: defaults.string(forKey: Keys.triggerMode) ?? "") ?? .toggle
         modelName = defaults.string(forKey: Keys.modelName) ?? "openai_whisper-base"
         restoreClipboard = defaults.object(forKey: Keys.restoreClipboard) as? Bool ?? true
+        pressReturnAfterInsert = defaults.object(forKey: Keys.pressReturn) as? Bool ?? false
         language = defaults.string(forKey: Keys.language) ?? "auto"
     }
 
@@ -51,6 +56,7 @@ final class AppSettings: ObservableObject {
         static let triggerMode = "triggerMode"
         static let modelName = "modelName"
         static let restoreClipboard = "restoreClipboard"
+        static let pressReturn = "pressReturnAfterInsert"
         static let language = "language"
     }
 }

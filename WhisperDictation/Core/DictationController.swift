@@ -62,14 +62,20 @@ final class DictationController: ObservableObject {
         setState(.transcribing)
         let text = await transcriber.stop()
         OverlayController.shared.hide()
+        Log.info("end() — final transcript: \(text.count) chars: \"\(text.prefix(80))\"")
 
         guard !text.isEmpty else {
+            Log.info("end() — empty transcript, nothing to insert")
             setState(.idle)
             return
         }
 
         setState(.inserting)
-        inserter.insert(text, restoreClipboard: AppSettings.shared.restoreClipboard)
+        inserter.insert(
+            text,
+            restoreClipboard: AppSettings.shared.restoreClipboard,
+            pressReturn: AppSettings.shared.pressReturnAfterInsert
+        )
         setState(.idle)
     }
 

@@ -34,6 +34,8 @@ struct SettingsView: View {
 
             Toggle("Restore clipboard after inserting", isOn: $settings.restoreClipboard)
 
+            Toggle("Press Return after inserting (submit)", isOn: $settings.pressReturnAfterInsert)
+
             LaunchAtLogin.Toggle("Launch at login")
 
             Picker("Language", selection: $settings.language) {
