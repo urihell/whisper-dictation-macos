@@ -39,7 +39,11 @@ targets:
         SWIFT_VERSION: "5.0"
         INFOPLIST_FILE: WhisperDictation/Support/Info.plist
         CODE_SIGN_ENTITLEMENTS: WhisperDictation/Support/WhisperDictation.entitlements
-        CODE_SIGN_STYLE: Automatic
+        # Stable self-signed identity so the Accessibility (TCC) grant persists
+        # across rebuilds. Create it in Keychain Access (Certificate Assistant →
+        # Code Signing, name "WhisperDictation Dev").
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "WhisperDictation Dev"
         GENERATE_INFOPLIST_FILE: NO
         ENABLE_HARDENED_RUNTIME: YES
         COMBINE_HIDPI_IMAGES: YES
