@@ -39,10 +39,6 @@ final class AppSettings: ObservableObject {
     @Published var cleanupEnabled: Bool {
         didSet { defaults.set(cleanupEnabled, forKey: Keys.cleanupEnabled) }
     }
-    /// Prepend a Right-to-Left Mark for Hebrew/Arabic text so it inserts RTL.
-    @Published var rtlForRTLText: Bool {
-        didSet { defaults.set(rtlForRTLText, forKey: Keys.rtlForRTLText) }
-    }
     /// ISO language code, or "auto" for detection.
     @Published var language: String {
         didSet { defaults.set(language, forKey: Keys.language) }
@@ -72,7 +68,6 @@ final class AppSettings: ObservableObject {
         restoreClipboard = defaults.object(forKey: Keys.restoreClipboard) as? Bool ?? true
         pressReturnAfterInsert = defaults.object(forKey: Keys.pressReturn) as? Bool ?? false
         cleanupEnabled = defaults.object(forKey: Keys.cleanupEnabled) as? Bool ?? false
-        rtlForRTLText = defaults.object(forKey: Keys.rtlForRTLText) as? Bool ?? true
         language = defaults.string(forKey: Keys.language) ?? "auto"
         useSingleKey = defaults.object(forKey: Keys.useSingleKey) as? Bool ?? false
         singleKeyCode = defaults.object(forKey: Keys.singleKeyCode) as? Int ?? -1
@@ -85,7 +80,6 @@ final class AppSettings: ObservableObject {
         static let restoreClipboard = "restoreClipboard"
         static let pressReturn = "pressReturnAfterInsert"
         static let cleanupEnabled = "cleanupEnabled"
-        static let rtlForRTLText = "rtlForRTLText"
         static let language = "language"
         static let useSingleKey = "useSingleKey"
         static let singleKeyCode = "singleKeyCode"

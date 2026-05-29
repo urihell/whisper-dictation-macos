@@ -13,27 +13,6 @@ final class TextInserter {
         return AXIsProcessTrustedWithOptions(options)
     }
 
-    /// If the text contains right-to-left script (Hebrew/Arabic/…), prepends a
-    /// Right-to-Left Mark (U+200F) so the receiving app sets an RTL paragraph
-    /// base direction. Display order is up to the app's bidi engine; this only
-    /// biases the base direction. No-op for purely LTR text.
-    static func applyingBaseDirection(_ text: String) -> String {
-        containsRTL(text) ? "\u{200F}" + text : text
-    }
-
-    static func containsRTL(_ text: String) -> Bool {
-        for scalar in text.unicodeScalars {
-            let v = scalar.value
-            // Hebrew/Arabic/Syriac/Thaana + Arabic presentation forms.
-            if (0x0590...0x08FF).contains(v)
-                || (0xFB1D...0xFDFF).contains(v)
-                || (0xFE70...0xFEFF).contains(v) {
-                return true
-            }
-        }
-        return false
-    }
-
     func insert(_ text: String, restoreClipboard: Bool, pressReturn: Bool = false) {
         guard !text.isEmpty else {
             Log.info("insert: skipped (empty text)")
