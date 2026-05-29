@@ -183,7 +183,7 @@ struct SettingsView: View {
                 KeyboardShortcuts.Recorder("Dictation hotkey:", name: .toggleDictation)
             }
 
-            Text("In push-to-talk mode, hold the trigger while you speak. In toggle mode, press once to start and again to stop.")
+            Text("In push-to-talk mode, hold the trigger while you speak. In toggle mode, press once to start and again to stop. Double-tap (either mode) to start hands-free dictation that keeps going until you press once to stop.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

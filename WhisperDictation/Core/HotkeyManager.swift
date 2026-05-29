@@ -19,19 +19,12 @@ final class HotkeyManager {
     func start() {
         KeyboardShortcuts.onKeyDown(for: .toggleDictation) {
             guard !AppSettings.shared.useSingleKey else { return }
-            switch AppSettings.shared.triggerMode {
-            case .toggle:
-                DictationController.shared.toggle()
-            case .pushToTalk:
-                DictationController.shared.begin()
-            }
+            DictationController.shared.triggerDown()
         }
 
         KeyboardShortcuts.onKeyUp(for: .toggleDictation) {
             guard !AppSettings.shared.useSingleKey else { return }
-            if AppSettings.shared.triggerMode == .pushToTalk {
-                Task { await DictationController.shared.end() }
-            }
+            DictationController.shared.triggerUp()
         }
 
         reconfigure()

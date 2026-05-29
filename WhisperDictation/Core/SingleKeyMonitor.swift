@@ -76,21 +76,12 @@ final class SingleKeyMonitor {
         case .keyDown:
             if !isRepeat, !isKeyDown {
                 isKeyDown = true
-                DispatchQueue.main.async {
-                    switch AppSettings.shared.triggerMode {
-                    case .toggle: DictationController.shared.toggle()
-                    case .pushToTalk: DictationController.shared.begin()
-                    }
-                }
+                DispatchQueue.main.async { DictationController.shared.triggerDown() }
             }
             return nil // swallow so the key doesn't type
         case .keyUp:
             isKeyDown = false
-            DispatchQueue.main.async {
-                if AppSettings.shared.triggerMode == .pushToTalk {
-                    Task { await DictationController.shared.end() }
-                }
-            }
+            DispatchQueue.main.async { DictationController.shared.triggerUp() }
             return nil // swallow
         default:
             return Unmanaged.passUnretained(event)
