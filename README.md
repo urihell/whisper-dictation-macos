@@ -63,6 +63,25 @@ Hotkey ─▶ AudioRecorder (AVAudioEngine, 16 kHz mono)
 (`idle → recording → transcribing → inserting → idle`) and publishes status to
 the menu bar icon.
 
+## Building a distributable DMG
+
+```bash
+./scripts/build-dmg.sh        # → dist/WhisperDictation.dmg
+```
+
+This produces an **ad-hoc-signed** DMG (no Apple Developer ID / notarization).
+It runs on other Macs, but because it isn't notarized, the first launch is
+blocked by Gatekeeper. On the recipient's Mac:
+
+1. Open the DMG and drag **Whisper Dictation** to **Applications**.
+2. First launch is blocked — go to **System Settings → Privacy & Security →
+   "Open Anyway"**, or run: `xattr -cr "/Applications/WhisperDictation.app"`.
+3. Grant **Microphone** and **Accessibility** when prompted.
+4. First dictation downloads the chosen model (needs internet once).
+
+For a clean, warning-free install on any Mac you'd need a paid Apple Developer
+ID and notarization — not set up here.
+
 ## Notes
 
 - The app runs **without the App Sandbox** because synthesizing ⌘V into other

@@ -3,9 +3,13 @@
 
 # Build artifacts
 build/
+build_release/
 DerivedData/
 .swiftpm/
 *.xcuserstate
+
+# Distributable artifacts (DMG)
+dist/
 
 # macOS
 .DS_Store
