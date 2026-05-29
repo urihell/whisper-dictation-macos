@@ -36,10 +36,29 @@ final class StreamingTranscriber: ObservableObject {
         isModelLoading = true
         defer { isModelLoading = false }
 
-        let config = WhisperKitConfig(model: modelName)
+        let base = Self.modelDownloadBase()
+        Log.info("Loading model '\(modelName)' (downloads on first use) into \(base.path)…")
+        // `load: true` is required: WhisperKit only auto-loads (which loads the
+        // tokenizer) when a modelFolder is passed. We pass downloadBase instead,
+        // so without this the tokenizer stays nil and streaming can't start.
+        let config = WhisperKitConfig(model: modelName, downloadBase: base, load: true)
         whisperKit = try await WhisperKit(config)
         loadedModelName = modelName
         loadedModel = modelName
+        Log.info("Model '\(modelName)' loaded. tokenizer=\(whisperKit?.tokenizer != nil)")
+    }
+
+    /// Where WhisperKit downloads/caches models. We override the default
+    /// (`~/Documents/huggingface`), which a non-sandboxed app cannot write to
+    /// on macOS 13+ without Documents-folder access (TCC). Application Support
+    /// is always writable.
+    private static func modelDownloadBase() -> URL {
+        let appSupport = FileManager.default
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first!
+            .appendingPathComponent("WhisperDictation", isDirectory: true)
+        try? FileManager.default.createDirectory(at: appSupport, withIntermediateDirectories: true)
+        return appSupport
     }
 
     /// Loads the model (if needed) and begins streaming transcription.
@@ -78,11 +97,13 @@ final class StreamingTranscriber: ObservableObject {
         }
 
         self.streamer = streamer
+        Log.info("Starting stream transcription (language=\(language ?? "auto"))")
         streamTask = Task {
             do {
                 try await streamer.startStreamTranscription()
+                Log.info("Stream transcription loop ended")
             } catch {
-                NSLog("StreamingTranscriber error: \(error.localizedDescription)")
+                Log.error("Stream transcription error: \(error.localizedDescription)")
             }
         }
     }

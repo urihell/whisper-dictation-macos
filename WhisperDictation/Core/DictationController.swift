@@ -39,6 +39,7 @@ final class DictationController: ObservableObject {
 
     func begin() {
         guard state == .idle else { return }
+        Log.info("begin() — preparing")
         setState(.preparing)
         OverlayController.shared.show()
         Task {
@@ -47,6 +48,7 @@ final class DictationController: ObservableObject {
                 // If the user already released (push-to-talk) we may have been
                 // moved out of .preparing; only advance if still preparing.
                 if state == .preparing { setState(.recording) }
+                Log.info("begin() — now \(String(describing: state))")
             } catch {
                 OverlayController.shared.hide()
                 fail(error)
@@ -78,7 +80,7 @@ final class DictationController: ObservableObject {
 
     private func fail(_ error: Error) {
         lastError = error.localizedDescription
-        NSLog("Dictation error: \(error.localizedDescription)")
+        Log.error("Dictation failed: \(error.localizedDescription)")
         setState(.idle)
     }
 }
