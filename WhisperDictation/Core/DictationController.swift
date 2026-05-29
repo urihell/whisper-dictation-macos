@@ -23,10 +23,6 @@ final class DictationController: ObservableObject {
     let transcriber = StreamingTranscriber()
     private let inserter = TextInserter()
 
-    // Monitors for the Escape key, active only while dictating.
-    private var escapeGlobalMonitor: Any?
-    private var escapeLocalMonitor: Any?
-
     // Suppresses the "switched" toast for the very first model load at launch.
     private var announcedFirstModel = false
 
@@ -76,22 +72,29 @@ final class DictationController: ObservableObject {
         }
     }
 
-    /// The trigger key/shortcut was pressed. Double-tap mode and single-tap mode
-    /// are mutually exclusive (Settings → Shortcut):
-    ///   - double-tap ON: only a double-tap acts (toggles start/stop); single
-    ///     presses and holds are ignored.
+    /// The trigger key/shortcut was pressed.
+    ///   - double-tap ON: a double-tap starts dictation; a single tap submits
+    ///     (stops + inserts) while running. A lone single tap when idle does
+    ///     nothing — it takes a double-tap to begin.
     ///   - double-tap OFF: single press toggles (or, in push-to-talk, starts and
     ///     the release stops); a double-tap is just two ordinary presses.
     func triggerDown() {
         if AppSettings.shared.doubleTapEnabled {
-            let now = Date()
-            let isDoubleTap = lastTriggerDownTime
-                .map { now.timeIntervalSince($0) <= Self.doubleTapWindow } ?? false
-            if isDoubleTap {
-                lastTriggerDownTime = nil   // consume the pair
-                toggle()
-            } else {
-                lastTriggerDownTime = now
+            switch state {
+            case .recording:
+                submit()                    // single tap submits while running
+            case .idle:
+                let now = Date()
+                let isDoubleTap = lastTriggerDownTime
+                    .map { now.timeIntervalSince($0) <= Self.doubleTapWindow } ?? false
+                if isDoubleTap {
+                    lastTriggerDownTime = nil   // consume the pair
+                    begin()
+                } else {
+                    lastTriggerDownTime = now
+                }
+            case .preparing, .transcribing, .cleaning, .inserting:
+                break // busy — ignore
             }
             return
         }
@@ -102,6 +105,13 @@ final class DictationController: ObservableObject {
         case .pushToTalk:
             if state == .idle { begin() }
         }
+    }
+
+    /// Stop dictation and insert (used by the single-tap / Enter submit in
+    /// double-tap mode). Presses Return too when "submit sends" is on.
+    func submit() {
+        guard state == .recording || state == .preparing else { return }
+        Task { await end(pressReturn: AppSettings.shared.submitSendsReturn) }
     }
 
     /// The trigger key/shortcut was released.
@@ -118,7 +128,7 @@ final class DictationController: ObservableObject {
         Log.info("begin() — preparing")
         setState(.preparing)
         OverlayController.shared.show()
-        startEscapeMonitors()
+        startSessionKeys()
         Task {
             do {
                 try await transcriber.start(language: AppSettings.shared.forcedLanguageCode)
@@ -133,9 +143,11 @@ final class DictationController: ObservableObject {
         }
     }
 
-    func end() async {
+    /// `pressReturn`: nil → use the global "Press Return after inserting"
+    /// setting; otherwise force on/off (used by submit).
+    func end(pressReturn: Bool? = nil) async {
         guard state == .preparing || state == .recording else { return }
-        stopEscapeMonitors()
+        stopSessionKeys()
 
         setState(.transcribing)
         var text = await transcriber.stop()
@@ -159,7 +171,7 @@ final class DictationController: ObservableObject {
         inserter.insert(
             text,
             restoreClipboard: AppSettings.shared.restoreClipboard,
-            pressReturn: AppSettings.shared.pressReturnAfterInsert
+            pressReturn: pressReturn ?? AppSettings.shared.pressReturnAfterInsert
         )
         setState(.idle)
     }
@@ -168,36 +180,24 @@ final class DictationController: ObservableObject {
     func cancel() async {
         guard state == .preparing || state == .recording else { return }
         Log.info("cancel() — discarding dictation")
-        stopEscapeMonitors()
+        stopSessionKeys()
         _ = await transcriber.stop()
         OverlayController.shared.hide()
         setState(.idle)
     }
 
-    // MARK: - Escape-to-cancel
+    // MARK: - In-session keys (Escape = cancel, Return = submit in double-tap mode)
 
-    private func startEscapeMonitors() {
-        escapeGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == 53 else { return } // Escape
-            Task { await self?.cancel() }
-        }
-        // Local monitor in case our own (HUD) window happens to be key.
-        escapeLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard event.keyCode == 53 else { return event }
-            Task { await self?.cancel() }
-            return nil
-        }
+    private func startSessionKeys() {
+        let tap = SessionKeyTap.shared
+        tap.onEscape = { Task { await DictationController.shared.cancel() } }
+        tap.shouldHandleReturn = { AppSettings.shared.doubleTapEnabled }
+        tap.onReturn = { DictationController.shared.submit() }
+        tap.start()
     }
 
-    private func stopEscapeMonitors() {
-        if let escapeGlobalMonitor {
-            NSEvent.removeMonitor(escapeGlobalMonitor)
-            self.escapeGlobalMonitor = nil
-        }
-        if let escapeLocalMonitor {
-            NSEvent.removeMonitor(escapeLocalMonitor)
-            self.escapeLocalMonitor = nil
-        }
+    private func stopSessionKeys() {
+        SessionKeyTap.shared.stop()
     }
 
     private func setState(_ newState: DictationState) {
@@ -206,7 +206,7 @@ final class DictationController: ObservableObject {
     }
 
     private func fail(_ error: Error) {
-        stopEscapeMonitors()
+        stopSessionKeys()
         lastError = error.localizedDescription
         Log.error("Dictation failed: \(error.localizedDescription)")
         setState(.idle)

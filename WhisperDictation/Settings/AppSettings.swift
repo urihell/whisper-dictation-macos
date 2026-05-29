@@ -53,6 +53,11 @@ final class AppSettings: ObservableObject {
     @Published var doubleTapEnabled: Bool {
         didSet { defaults.set(doubleTapEnabled, forKey: Keys.doubleTapEnabled) }
     }
+    /// In double-tap mode, whether submitting (single tap / Enter) also presses
+    /// Return to send. When false, it only inserts.
+    @Published var submitSendsReturn: Bool {
+        didSet { defaults.set(submitSendsReturn, forKey: Keys.submitSendsReturn) }
+    }
     /// Virtual key code of the single-key trigger, or -1 if unset.
     @Published var singleKeyCode: Int {
         didSet { defaults.set(singleKeyCode, forKey: Keys.singleKeyCode) }
@@ -75,6 +80,7 @@ final class AppSettings: ObservableObject {
         language = defaults.string(forKey: Keys.language) ?? "auto"
         useSingleKey = defaults.object(forKey: Keys.useSingleKey) as? Bool ?? false
         doubleTapEnabled = defaults.object(forKey: Keys.doubleTapEnabled) as? Bool ?? true
+        submitSendsReturn = defaults.object(forKey: Keys.submitSendsReturn) as? Bool ?? true
         singleKeyCode = defaults.object(forKey: Keys.singleKeyCode) as? Int ?? -1
         singleKeyLabel = defaults.string(forKey: Keys.singleKeyLabel) ?? ""
     }
@@ -88,6 +94,7 @@ final class AppSettings: ObservableObject {
         static let language = "language"
         static let useSingleKey = "useSingleKey"
         static let doubleTapEnabled = "doubleTapEnabled"
+        static let submitSendsReturn = "submitSendsReturn"
         static let singleKeyCode = "singleKeyCode"
         static let singleKeyLabel = "singleKeyLabel"
     }

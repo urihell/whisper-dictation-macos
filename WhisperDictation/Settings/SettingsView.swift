@@ -183,12 +183,20 @@ struct SettingsView: View {
                 KeyboardShortcuts.Recorder("Dictation hotkey:", name: .toggleDictation)
             }
 
-            Toggle("Require double-tap (single press disabled)", isOn: $settings.doubleTapEnabled)
+            Toggle("Require double-tap to start", isOn: $settings.doubleTapEnabled)
 
-            Text("With double-tap required, only a double-tap starts/stops dictation — single press and hold do nothing. With it off, single press works: in toggle mode press once to start and again to stop; in push-to-talk hold the trigger while you speak.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            if settings.doubleTapEnabled {
+                Toggle("Submit also presses Return (send)", isOn: $settings.submitSendsReturn)
+                Text("Double-tap to start dictation; a single tap — or the Return key — submits (stops and inserts). When the option above is on, submitting also presses Return to send.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Single press works: in toggle mode press once to start and again to stop; in push-to-talk hold the trigger while you speak.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding()
     }
