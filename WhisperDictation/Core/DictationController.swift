@@ -63,10 +63,8 @@ final class DictationController: ObservableObject {
     // Trigger gesture handling (shared by the key-combo and single-key paths).
     private static let doubleTapWindow: TimeInterval = 0.3
     private var lastTriggerDownTime: Date?
-    private var latched = false           // hands-free: release won't stop it
-    private var pttStopToken = 0          // guards the deferred push-to-talk stop
 
-    /// Toggle-mode entry point: start if idle, finish if live. Used by the menu.
+    /// Start if idle, finish if live. Used by the menu and the trigger handlers.
     func toggle() {
         switch state {
         case .idle:
@@ -78,55 +76,41 @@ final class DictationController: ObservableObject {
         }
     }
 
-    /// The trigger key/shortcut was pressed. Handles single press, toggle, and
-    /// double-tap-to-latch, regardless of trigger mode.
+    /// The trigger key/shortcut was pressed. Double-tap mode and single-tap mode
+    /// are mutually exclusive (Settings → Shortcut):
+    ///   - double-tap ON: only a double-tap acts (toggles start/stop); single
+    ///     presses and holds are ignored.
+    ///   - double-tap OFF: single press toggles (or, in push-to-talk, starts and
+    ///     the release stops); a double-tap is just two ordinary presses.
     func triggerDown() {
-        let now = Date()
-        let isDoubleTap = AppSettings.shared.doubleTapEnabled
-            && (lastTriggerDownTime.map { now.timeIntervalSince($0) <= Self.doubleTapWindow } ?? false)
-        lastTriggerDownTime = now
-
-        if isDoubleTap {
-            // Hands-free: keep dictation running until an explicit stop press.
-            latched = true
-            pttStopToken &+= 1            // cancel any pending push-to-talk stop
-            if state == .idle { begin() }
+        if AppSettings.shared.doubleTapEnabled {
+            let now = Date()
+            let isDoubleTap = lastTriggerDownTime
+                .map { now.timeIntervalSince($0) <= Self.doubleTapWindow } ?? false
+            if isDoubleTap {
+                lastTriggerDownTime = nil   // consume the pair
+                toggle()
+            } else {
+                lastTriggerDownTime = now
+            }
             return
         }
 
-        switch state {
-        case .idle:
-            begin()
-        case .recording:
-            latched = false
-            Task { await end() }
-        case .preparing, .transcribing, .cleaning, .inserting:
-            break // busy — ignore
+        switch AppSettings.shared.triggerMode {
+        case .toggle:
+            toggle()
+        case .pushToTalk:
+            if state == .idle { begin() }
         }
     }
 
     /// The trigger key/shortcut was released.
     func triggerUp() {
-        guard !latched else { return }
+        // In double-tap mode, holds/releases do nothing.
+        guard !AppSettings.shared.doubleTapEnabled else { return }
         guard AppSettings.shared.triggerMode == .pushToTalk else { return }
         guard state == .recording || state == .preparing else { return }
-
-        // Without double-tap, stop immediately on release (responsive PTT).
-        guard AppSettings.shared.doubleTapEnabled else {
-            Task { await end() }
-            return
-        }
-
-        // Defer the stop briefly so a quick second tap can become a double-tap
-        // (latching) instead of ending the session.
-        pttStopToken &+= 1
-        let token = pttStopToken
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.doubleTapWindow) { [weak self] in
-            guard let self, self.pttStopToken == token, !self.latched else { return }
-            if self.state == .recording || self.state == .preparing {
-                Task { await self.end() }
-            }
-        }
+        Task { await end() }
     }
 
     func begin() {
@@ -217,7 +201,6 @@ final class DictationController: ObservableObject {
     }
 
     private func setState(_ newState: DictationState) {
-        if newState == .idle { latched = false }
         state = newState
         StatusController.shared.state = newState
     }

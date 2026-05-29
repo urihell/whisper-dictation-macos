@@ -183,9 +183,9 @@ struct SettingsView: View {
                 KeyboardShortcuts.Recorder("Dictation hotkey:", name: .toggleDictation)
             }
 
-            Toggle("Double-tap to start hands-free dictation", isOn: $settings.doubleTapEnabled)
+            Toggle("Require double-tap (single press disabled)", isOn: $settings.doubleTapEnabled)
 
-            Text("In push-to-talk mode, hold the trigger while you speak. In toggle mode, press once to start and again to stop. When enabled, double-tap (either mode) starts hands-free dictation that keeps going until you press once to stop.")
+            Text("With double-tap required, only a double-tap starts/stops dictation — single press and hold do nothing. With it off, single press works: in toggle mode press once to start and again to stop; in push-to-talk hold the trigger while you speak.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
