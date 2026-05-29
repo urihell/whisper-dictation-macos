@@ -9,5 +9,10 @@
 	<!-- Microphone access under the hardened runtime. -->
 	<key>com.apple.security.device.audio-input</key>
 	<true/>
+	<!-- Allow loading the SPM frameworks + debug dylib when signed with a
+	     self-signed (no Team ID) cert. Without this, Hardened Runtime library
+	     validation aborts the app at launch (dyld code-signature SIGABRT). -->
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
 </dict>
 </plist>
