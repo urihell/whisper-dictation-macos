@@ -11,6 +11,7 @@ final class StatusController: ObservableObject {
     var symbolName: String {
         switch state {
         case .idle: return "mic"
+        case .preparing: return "mic.badge.plus"
         case .recording: return "mic.fill"
         case .transcribing, .inserting: return "waveform"
         }

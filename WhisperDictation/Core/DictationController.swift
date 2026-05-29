@@ -3,13 +3,14 @@ import Combine
 
 enum DictationState {
     case idle
-    case recording
-    case transcribing
+    case preparing   // loading model / starting the stream
+    case recording   // streaming live transcription
+    case transcribing // finalizing after stop
     case inserting
 }
 
-/// Orchestrates a dictation session: record → transcribe → insert, publishing
-/// state for the menu bar UI.
+/// Orchestrates a dictation session: show HUD → stream live → insert final
+/// text at the cursor on stop. Publishes state for the menu bar and HUD.
 @MainActor
 final class DictationController: ObservableObject {
     static let shared = DictationController()
@@ -17,59 +18,57 @@ final class DictationController: ObservableObject {
     @Published private(set) var state: DictationState = .idle
     @Published var lastError: String?
 
-    private let recorder = AudioRecorder()
-    private let transcriber = TranscriptionService()
+    let transcriber = StreamingTranscriber()
     private let inserter = TextInserter()
 
     private init() {}
 
     var isActive: Bool { state != .idle }
 
-    /// Toggle-mode entry point: start if idle, finish if recording.
+    /// Toggle-mode entry point: start if idle, finish if live.
     func toggle() {
         switch state {
         case .idle:
             begin()
         case .recording:
             Task { await end() }
-        case .transcribing, .inserting:
+        case .preparing, .transcribing, .inserting:
             break // busy — ignore
         }
     }
 
     func begin() {
         guard state == .idle else { return }
+        setState(.preparing)
+        OverlayController.shared.show()
         Task {
             do {
-                try await recorder.start()
-                setState(.recording)
+                try await transcriber.start(language: AppSettings.shared.forcedLanguageCode)
+                // If the user already released (push-to-talk) we may have been
+                // moved out of .preparing; only advance if still preparing.
+                if state == .preparing { setState(.recording) }
             } catch {
+                OverlayController.shared.hide()
                 fail(error)
             }
         }
     }
 
     func end() async {
-        guard state == .recording else { return }
+        guard state == .preparing || state == .recording else { return }
 
-        let samples = recorder.stop()
         setState(.transcribing)
+        let text = await transcriber.stop()
+        OverlayController.shared.hide()
 
-        do {
-            let text = try await transcriber.transcribe(
-                samples: samples,
-                language: AppSettings.shared.forcedLanguageCode
-            )
-            guard !text.isEmpty else {
-                setState(.idle)
-                return
-            }
-            setState(.inserting)
-            inserter.insert(text, restoreClipboard: AppSettings.shared.restoreClipboard)
+        guard !text.isEmpty else {
             setState(.idle)
-        } catch {
-            fail(error)
+            return
         }
+
+        setState(.inserting)
+        inserter.insert(text, restoreClipboard: AppSettings.shared.restoreClipboard)
+        setState(.idle)
     }
 
     private func setState(_ newState: DictationState) {

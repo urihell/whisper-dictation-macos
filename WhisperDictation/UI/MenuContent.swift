@@ -29,6 +29,7 @@ struct MenuContent: View {
     private var statusText: String {
         switch controller.state {
         case .idle: return "Ready"
+        case .preparing: return "Starting…"
         case .recording: return "Recording…"
         case .transcribing: return "Transcribing…"
         case .inserting: return "Inserting…"

@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 import KeyboardShortcuts
 import LaunchAtLogin
 
@@ -16,6 +17,10 @@ struct SettingsView: View {
         }
         .frame(width: 480)
         .padding()
+        // This is a menu-bar-only (LSUIElement) app, so it isn't active by
+        // default. Without activating, the Settings window can't become key and
+        // the shortcut recorder never receives keystrokes.
+        .onAppear { NSApp.activate(ignoringOtherApps: true) }
     }
 
     private var general: some View {
