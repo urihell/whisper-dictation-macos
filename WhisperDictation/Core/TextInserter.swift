@@ -4,6 +4,13 @@ import ApplicationServices
 /// Inserts text into the focused app by placing it on the pasteboard and
 /// synthesizing a ⌘V keystroke, then restoring the prior clipboard.
 final class TextInserter {
+    /// Markers honored by clipboard managers (Maccy, Raycast, Paste, …) to skip
+    /// recording an item. We set both so the dictated text — which can be a
+    /// password, 2FA code, or private message — isn't captured into clipboard
+    /// history during the brief paste-then-restore window. See nspasteboard.org.
+    private static let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
+    private static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
+
     /// Returns whether the process is trusted for Accessibility. When `prompt`
     /// is true and untrusted, macOS shows its grant dialog.
     @discardableResult
@@ -31,8 +38,13 @@ final class TextInserter {
         let pasteboard = NSPasteboard.general
         let saved = restoreClipboard ? pasteboard.string(forType: .string) : nil
 
-        pasteboard.clearContents()
+        // Declare the concealed/transient markers alongside the string so
+        // clipboard-history tools don't archive the dictated text. declareTypes
+        // clears the pasteboard and bumps the change count itself.
+        pasteboard.declareTypes([.string, Self.concealedType, Self.transientType], owner: nil)
         pasteboard.setString(text, forType: .string)
+        pasteboard.setData(Data(), forType: Self.concealedType)
+        pasteboard.setData(Data(), forType: Self.transientType)
 
         // Give the pasteboard a beat to settle, then paste.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
