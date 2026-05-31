@@ -151,7 +151,10 @@ final class DictationController: ObservableObject {
 
         setState(.transcribing)
         var text = await transcriber.stop()
-        Log.info("end() — raw transcript: \(text.count) chars: \"\(text.prefix(80))\"")
+        // Log only the length — never the dictated content. The transcript can
+        // contain passwords, 2FA codes, or private messages, and the unified log
+        // is persisted and readable via Console/sysdiagnose.
+        Log.info("end() — raw transcript: \(text.count) chars")
 
         // Optional on-device cleanup (remove self-corrections + filler).
         if AppSettings.shared.cleanupEnabled, SpeechCleaner.isAvailable, !text.isEmpty {
