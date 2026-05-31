@@ -1,8 +1,13 @@
 import AppKit
 import ApplicationServices
 
-/// Inserts text into the focused app by placing it on the pasteboard and
-/// synthesizing a ⌘V keystroke, then restoring the prior clipboard.
+/// Inserts text into the focused app. Two strategies:
+///   • Direct typing (default) — synthesizes the characters as Unicode key
+///     events. The text never touches the clipboard, so no clipboard manager
+///     can capture it. Strongest privacy.
+///   • Clipboard paste — puts the text on the pasteboard and synthesizes ⌘V,
+///     then restores the prior clipboard. Fallback for apps that mishandle
+///     synthesized Unicode input.
 final class TextInserter {
     /// Markers honored by clipboard managers (Maccy, Raycast, Paste, …) to skip
     /// recording an item. We set both so the dictated text — which can be a
@@ -20,19 +25,30 @@ final class TextInserter {
         return AXIsProcessTrustedWithOptions(options)
     }
 
-    func insert(_ text: String, restoreClipboard: Bool, pressReturn: Bool = false) {
+    func insert(_ text: String, directType: Bool, restoreClipboard: Bool, pressReturn: Bool = false) {
         guard !text.isEmpty else {
             Log.info("insert: skipped (empty text)")
             return
         }
 
         let trusted = AXIsProcessTrusted()
-        Log.info("insert: \(text.count) chars, accessibilityTrusted=\(trusted)")
+        Log.info("insert: \(text.count) chars, accessibilityTrusted=\(trusted), directType=\(directType)")
         if !trusted {
-            // Synthetic key events are silently dropped without Accessibility
-            // trust. Prompt and bail — the text stays on the clipboard.
-            Log.error("insert: not trusted for Accessibility — ⌘V will be ignored. Prompting.")
+            // Synthetic events are silently dropped without Accessibility trust.
+            Log.error("insert: not trusted for Accessibility — synthesized input will be ignored. Prompting.")
             Self.ensureAccessibilityPermission(prompt: true)
+        }
+
+        if directType {
+            typeDirectly(text)
+            Log.info("insert: typed \(text.count) chars directly (clipboard untouched)")
+            if pressReturn {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                    self?.pressReturnKey()
+                    Log.info("insert: Return posted")
+                }
+            }
+            return
         }
 
         let pasteboard = NSPasteboard.general
@@ -67,6 +83,27 @@ final class TextInserter {
                     }
                 }
             }
+        }
+    }
+
+    /// Types `text` by synthesizing Unicode key events — no clipboard involved.
+    /// Layout-independent (the character is set on the event directly, so it
+    /// doesn't depend on the user's keyboard layout). `keyboardSetUnicodeString`
+    /// is reliable only for short strings, so we send it in small UTF-16 chunks.
+    private func typeDirectly(_ text: String) {
+        let source = CGEventSource(stateID: .combinedSessionState)
+        let units = Array(text.utf16)
+        let chunkSize = 20
+        var i = 0
+        while i < units.count {
+            let chunk = Array(units[i ..< min(i + chunkSize, units.count)])
+            for keyDown in [true, false] {
+                guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: keyDown) else { continue }
+                event.flags = [] // no modifiers — emit the raw characters
+                event.keyboardSetUnicodeString(stringLength: chunk.count, unicodeString: chunk)
+                event.post(tap: .cghidEventTap)
+            }
+            i += chunkSize
         }
     }
 

@@ -31,6 +31,13 @@ final class AppSettings: ObservableObject {
     @Published var restoreClipboard: Bool {
         didSet { defaults.set(restoreClipboard, forKey: Keys.restoreClipboard) }
     }
+    /// Insert by synthesizing the characters directly rather than pasting via the
+    /// clipboard. Keeps dictated text off the pasteboard entirely, so no clipboard
+    /// manager can ever capture it. On by default; turn off to fall back to
+    /// clipboard paste for apps that mishandle synthesized Unicode input.
+    @Published var directTyping: Bool {
+        didSet { defaults.set(directTyping, forKey: Keys.directTyping) }
+    }
     /// Press Return after inserting, to submit chat boxes/search fields.
     @Published var pressReturnAfterInsert: Bool {
         didSet { defaults.set(pressReturnAfterInsert, forKey: Keys.pressReturn) }
@@ -90,6 +97,7 @@ final class AppSettings: ObservableObject {
         triggerMode = TriggerMode(rawValue: defaults.string(forKey: Keys.triggerMode) ?? "") ?? .toggle
         modelName = defaults.string(forKey: Keys.modelName) ?? "openai_whisper-base"
         restoreClipboard = defaults.object(forKey: Keys.restoreClipboard) as? Bool ?? true
+        directTyping = defaults.object(forKey: Keys.directTyping) as? Bool ?? true
         pressReturnAfterInsert = defaults.object(forKey: Keys.pressReturn) as? Bool ?? false
         cleanupEnabled = defaults.object(forKey: Keys.cleanupEnabled) as? Bool ?? false
         language = defaults.string(forKey: Keys.language) ?? "auto"
@@ -107,6 +115,7 @@ final class AppSettings: ObservableObject {
         static let triggerMode = "triggerMode"
         static let modelName = "modelName"
         static let restoreClipboard = "restoreClipboard"
+        static let directTyping = "directTyping"
         static let pressReturn = "pressReturnAfterInsert"
         static let cleanupEnabled = "cleanupEnabled"
         static let language = "language"

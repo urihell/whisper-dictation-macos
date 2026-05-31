@@ -41,7 +41,16 @@ struct SettingsView: View {
             }
             .pickerStyle(.radioGroup)
 
+            VStack(alignment: .leading, spacing: 2) {
+                Toggle("Type text directly (don't use the clipboard)", isOn: $settings.directTyping)
+                Text("Most private: dictated text is typed straight into the app and never touches the clipboard, so no clipboard manager can record it. Turn off only if a particular app mishandles the typed text — then it falls back to clipboard paste.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Toggle("Restore clipboard after inserting", isOn: $settings.restoreClipboard)
+                .disabled(settings.directTyping)
 
             Toggle("Press Return after inserting (submit)", isOn: $settings.pressReturnAfterInsert)
 

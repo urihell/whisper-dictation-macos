@@ -173,6 +173,7 @@ final class DictationController: ObservableObject {
         setState(.inserting)
         inserter.insert(
             text,
+            directType: AppSettings.shared.directTyping,
             restoreClipboard: AppSettings.shared.restoreClipboard,
             pressReturn: pressReturn ?? AppSettings.shared.pressReturnAfterInsert
         )
