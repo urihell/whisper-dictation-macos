@@ -15,16 +15,71 @@ key, no per-use cost.
 - 🪧 **Menu bar only** — no Dock icon, stays out of the way
 - 🔒 **Fully offline** after the first model download
 
-## Requirements
+## Download & install
+
+1. **[Download the latest DMG](https://github.com/urihell/whisper-dictation-macos/releases/latest/download/WhisperDictation.dmg)**
+   (Apple Silicon Mac, macOS 14 Sonoma or later).
+2. Open the DMG and drag **Whisper Dictation** into **Applications**.
+3. **First launch is blocked by Gatekeeper.** This app is open source but not
+   notarized by Apple (a paid Developer account I've chosen not to buy), so
+   macOS warns about an "unidentified developer." To open it anyway:
+   - Try to open the app once (you'll get the warning — that's expected).
+   - Go to **System Settings → Privacy & Security**, scroll down, and click
+     **"Open Anyway"** next to the Whisper Dictation message, then confirm.
+   - On **macOS 15 (Sequoia) and later** this is the *only* way — the old
+     right-click → Open trick no longer works.
+   - Power-user alternative: `xattr -cr "/Applications/WhisperDictation.app"`
+     in Terminal, then open normally.
+4. Grant **Microphone** (on first dictation) and **Accessibility**
+   (System Settings → Privacy & Security → Accessibility — required to paste
+   into other apps).
+5. The first dictation downloads your chosen Whisper model (needs internet
+   once); everything after that is offline.
+
+> **Why does it need Accessibility?** Whisper Dictation inserts text by
+> synthesizing a ⌘V keystroke into the focused app, which macOS gates behind
+> Accessibility. If you'd rather not trust a pre-built binary with that access,
+> the full source is in this repo — build it yourself (see below).
+
+## First-run settings
+
+Open **Settings** from the menu bar icon:
+
+- **Shortcut** — record your dictation hotkey (push-to-talk or toggle).
+- **Model** — pick a size (`base` is a good start; `large-v3` for best
+  multilingual accuracy). Downloads on first use.
+- **General** — trigger mode, language, launch at login.
+
+Then focus any text field, trigger the hotkey, and speak.
+
+## How it works
+
+```
+Hotkey ─▶ AudioRecorder (AVAudioEngine, 16 kHz mono)
+       ─▶ TranscriptionService (WhisperKit)
+       ─▶ TextInserter (NSPasteboard + synthesized ⌘V)
+```
+
+`DictationController` runs the state machine
+(`idle → recording → transcribing → inserting → idle`) and publishes status to
+the menu bar icon. The app runs **without the App Sandbox** because
+synthesizing ⌘V into other apps requires Accessibility access, which sandboxed
+apps cannot use — so it is not a Mac App Store app.
+
+---
+
+## For developers
+
+### Requirements
 
 - macOS 14 (Sonoma) or later — Apple Silicon recommended
 - [Xcode](https://developer.apple.com/xcode/) 15+
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen): `brew install xcodegen`
 
-## Build & run
+### Build & run
 
 ```bash
-# Generate the Xcode project from project.yml
+# Generate the Xcode project from project.yml (source of truth)
 xcodegen generate
 
 # Open and run (⌘R). Select your signing team in Signing & Capabilities first.
@@ -38,58 +93,23 @@ xcodebuild -scheme WhisperDictation -configuration Debug \
   -destination 'platform=macOS' build
 ```
 
-## First run
+The generated `WhisperDictation.xcodeproj` is git-ignored; regenerate it with
+`xcodegen generate`.
 
-1. **Microphone** — granted on your first dictation.
-2. **Accessibility** — required to paste into other apps. Grant it in
-   **System Settings → Privacy & Security → Accessibility** (enable
-   *Whisper Dictation*).
-3. Open **Settings** from the menu bar:
-   - **Shortcut** — record your dictation hotkey.
-   - **Model** — pick a size (downloads on first use; `base` is a good start,
-     `large-v3` for best multilingual accuracy).
-   - **General** — trigger mode, language, launch at login.
-4. Focus any text field, trigger the hotkey, and speak.
-
-## How it works
-
-```
-Hotkey ─▶ AudioRecorder (AVAudioEngine, 16 kHz mono)
-       ─▶ TranscriptionService (WhisperKit)
-       ─▶ TextInserter (NSPasteboard + synthesized ⌘V)
-```
-
-`DictationController` runs the state machine
-(`idle → recording → transcribing → inserting → idle`) and publishes status to
-the menu bar icon.
-
-## Building a distributable DMG
+### Cutting a release
 
 ```bash
 ./scripts/build-dmg.sh        # → dist/WhisperDictation.dmg
+gh release create vX.Y.Z dist/WhisperDictation.dmg \
+  --title "vX.Y.Z" --notes "…"
 ```
 
-This produces an **ad-hoc-signed** DMG (no Apple Developer ID / notarization).
-It runs on other Macs, but because it isn't notarized, the first launch is
-blocked by Gatekeeper. On the recipient's Mac:
-
-1. Open the DMG and drag **Whisper Dictation** to **Applications**.
-2. First launch is blocked — go to **System Settings → Privacy & Security →
-   "Open Anyway"**, or run: `xattr -cr "/Applications/WhisperDictation.app"`.
-3. Grant **Microphone** and **Accessibility** when prompted.
-4. First dictation downloads the chosen model (needs internet once).
-
-For a clean, warning-free install on any Mac you'd need a paid Apple Developer
-ID and notarization — not set up here.
-
-## Notes
-
-- The app runs **without the App Sandbox** because synthesizing ⌘V into other
-  apps requires Accessibility access, which sandboxed apps cannot use. It is
-  intended as a personal, locally-built tool — not a Mac App Store app.
-- The generated `WhisperDictation.xcodeproj` is git-ignored; regenerate it with
-  `xcodegen generate`. `project.yml` is the source of truth.
+`build-dmg.sh` produces an **ad-hoc-signed** DMG (no Apple Developer ID /
+notarization), which is why recipients see the Gatekeeper step above. SwiftPM
+dependencies are linked statically, so the app is self-contained and portable.
+For a clean, warning-free install you'd need a paid Apple Developer ID plus a
+`notarytool` step — not set up here.
 
 ## License
 
-Personal project — no license granted yet.
+[MIT](LICENSE) © 2026 Uriel Dabby
