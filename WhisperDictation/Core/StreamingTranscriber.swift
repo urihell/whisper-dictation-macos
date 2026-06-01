@@ -69,6 +69,9 @@ final class StreamingTranscriber: ObservableObject {
     private var lastShown = ""
     /// Language for this session (nil = auto), reused for the final pass on stop.
     private var sessionLanguage: String?
+    /// End time (seconds, absolute in the session audio) of the last locked
+    /// segment — the boundary past which the tail still needs decoding on stop.
+    private var lastConfirmedEnd: Float = 0
 
     // Speech-activity detection (SoundAnalysis) used to suppress silent sessions.
     private var vad: SpeechActivityDetector?
@@ -218,6 +221,7 @@ final class StreamingTranscriber: ObservableObject {
         confirmedText = ""
         tailText = ""
         lastShown = ""
+        lastConfirmedEnd = 0
         liveText = ""
         audioLevel = 0
         vad = SpeechActivityDetector()
@@ -255,10 +259,12 @@ final class StreamingTranscriber: ObservableObject {
             let tail = livePartial.isEmpty ? unconfirmed : livePartial
             let candidate = Self.clean([confirmed, tail].filter { !$0.isEmpty }.joined(separator: " "))
             let level = newState.bufferEnergy.suffix(8).max() ?? 0
+            let confirmedEnd = newState.lastConfirmedSegmentEndSeconds
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.confirmedText = confirmed
                 self.tailText = tail
+                self.lastConfirmedEnd = confirmedEnd
                 self.feedVAD()
                 self.publish(candidate: candidate, isIdle: isIdle)
                 self.updateLevel(level)
@@ -279,8 +285,9 @@ final class StreamingTranscriber: ObservableObject {
 
     /// Stops streaming and returns the cleaned final transcript.
     func stop() async -> String {
-        // Capture the full captured audio before tearing the stream down.
+        // Capture the full audio + last-confirmed boundary before teardown.
         let samples = whisperKit?.audioProcessor.audioSamples
+        let confirmedEnd = lastConfirmedEnd
         await streamer?.stopStreamTranscription()
         streamTask?.cancel()
         streamTask = nil
@@ -292,24 +299,25 @@ final class StreamingTranscriber: ObservableObject {
 
         guard !suppress else { return "" }
 
-        // The streaming results are missing the last ~second of audio (the loop
-        // decodes in windows and hasn't processed the final buffer). Re-transcribe
-        // the whole utterance for a complete, full-context result; fall back to
-        // the streamed text if that fails.
+        // The streaming loop hasn't decoded the final ~second of audio yet, so its
+        // tail is incomplete. Re-decode ONLY the un-confirmed tail — the audio
+        // after the last locked segment — and append it to the confirmed prefix.
+        // This recovers the dropped words without re-transcribing the whole
+        // utterance (which made stop slow). Falls back to the streamed text.
         var text = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
-        if let whisperKit, let tokenizer = whisperKit.tokenizer,
-           let samples, samples.count > Int(Self.sampleRate * 0.3) {
-            var opts = decodeOptions(language: sessionLanguage, tokenizer: tokenizer)
-            opts.chunkingStrategy = .vad   // handle long utterances cleanly
-            if let results = try? await whisperKit.transcribe(audioArray: Array(samples), decodeOptions: opts),
-               !results.isEmpty {
-                let joined = results
-                    .flatMap { $0.segments }
-                    .filter(Self.isSpeechSegment)
-                    .map(\.text)
-                    .joined(separator: " ")
-                let cleaned = Self.clean(joined)
-                if !cleaned.isEmpty { text = cleaned }
+        if let whisperKit, let tokenizer = whisperKit.tokenizer, let samples {
+            let start = max(0, min(Int(confirmedEnd * Float(Self.sampleRate)), samples.count))
+            let tailAudio = Array(samples[start...])
+            if tailAudio.count > Int(Self.sampleRate * 0.2) {
+                let opts = decodeOptions(language: sessionLanguage, tokenizer: tokenizer)
+                if let results = try? await whisperKit.transcribe(audioArray: tailAudio, decodeOptions: opts),
+                   !results.isEmpty {
+                    let tailWords = Self.clean(
+                        results.flatMap { $0.segments }.filter(Self.isSpeechSegment).map(\.text).joined(separator: " ")
+                    )
+                    let prefix = Self.clean(confirmedText)
+                    text = [prefix, tailWords].filter { !$0.isEmpty }.joined(separator: " ")
+                }
             }
         }
 
