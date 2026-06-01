@@ -54,9 +54,15 @@ glyph_black = Image.merge("RGBA", (zero, zero, zero, alpha))
 # ---- Menu-bar template ----
 # The full glyph is too detailed at 18px, so use just the microphone (the left
 # part), split at the widest internal vertical gap between mic and text lines.
-split = int(gw * 0.46)  # mic occupies roughly the left ~46% of the glyph
-mic = glyph_black.crop((0, 0, split, gh))
-mic = mic.crop(mic.getbbox())  # trim transparent margin
+# The artwork's mic is a HALF mic (flat down the middle). Mirror it about that
+# flat edge to make a whole, symmetric microphone for the menu bar.
+split = int(gw * 0.46)
+half = glyph_black.crop((0, 0, split, gh))
+flip = half.transpose(Image.FLIP_LEFT_RIGHT)
+full = Image.new("RGBA", (split * 2, gh), (0, 0, 0, 0))
+full.paste(half, (0, 0), half)
+full.paste(flip, (split, 0), flip)
+mic = full.crop(full.getbbox())  # trim transparent margin
 mw, mh = mic.size
 
 side = max(mw, mh)
