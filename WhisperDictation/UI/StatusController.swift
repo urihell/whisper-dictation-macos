@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import AppKit
 import ApplicationServices
 
 /// Drives the menu bar icon based on the current dictation state, and tracks
@@ -16,17 +17,16 @@ final class StatusController: ObservableObject {
 
     private var pollTimer: Timer?
 
-    var symbolName: String {
-        // Surface a warning at rest when we can't type into other apps — this is
-        // the silent failure mode after the grant is revoked or a fresh install.
-        if !accessibilityTrusted, state == .idle { return "exclamationmark.triangle.fill" }
-        switch state {
-        case .idle: return "mic"
-        case .preparing: return "mic.badge.plus"
-        case .recording: return "mic.fill"
-        case .transcribing, .inserting: return "waveform"
-        case .cleaning: return "sparkles"
-        }
+    /// Show a warning glyph at rest when we can't type into other apps — the
+    /// silent failure mode after the grant is revoked or on a fresh install.
+    var showsAccessibilityWarning: Bool {
+        !accessibilityTrusted && state == .idle
+    }
+
+    /// The feather glyph for the menu bar: monochrome (template) at rest, solid
+    /// indigo while a dictation session is active.
+    var menuBarImage: NSImage {
+        FeatherIcon.image(tint: state == .idle ? nil : .brand)
     }
 
     private init() {}

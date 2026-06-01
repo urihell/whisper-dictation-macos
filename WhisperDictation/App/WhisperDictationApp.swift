@@ -12,12 +12,11 @@ struct WhisperDictationApp: App {
             MenuContent()
                 .environmentObject(controller)
         } label: {
-            Image(systemName: status.symbolName)
-                .symbolEffect(
-                    .pulse,
-                    isActive: status.state == .recording
-                        && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
-                )
+            if status.showsAccessibilityWarning {
+                Image(systemName: "exclamationmark.triangle.fill")
+            } else {
+                Image(nsImage: status.menuBarImage)
+            }
         }
 
         Settings {
