@@ -4,6 +4,7 @@ import SwiftUI
 struct DictationHUD: View {
     @ObservedObject var transcriber: StreamingTranscriber
     @ObservedObject var controller: DictationController
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -18,6 +19,8 @@ struct DictationHUD: View {
                         .foregroundStyle(.primary)
                         .multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentTransition(reduceMotion ? .identity : .opacity)
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: displayText)
                         .id(Self.textAnchor)
                 }
                 .frame(height: 72) // ~4 lines; longer text scrolls
@@ -50,14 +53,14 @@ struct DictationHUD: View {
                 .controlSize(.small)
         case .cleaning:
             Image(systemName: "sparkles")
-                .symbolEffect(.variableColor.iterative, options: .repeating)
+                .symbolEffect(.variableColor.iterative, options: .repeating, isActive: !reduceMotion)
                 .foregroundStyle(Color.brand)
         case .transcribing, .inserting:
             Image(systemName: "waveform")
-                .symbolEffect(.variableColor.iterative, options: .repeating)
+                .symbolEffect(.variableColor.iterative, options: .repeating, isActive: !reduceMotion)
                 .foregroundStyle(Color.brand)
         default:
-            LevelMeter(level: CGFloat(transcriber.audioLevel))
+            LevelMeter(level: CGFloat(transcriber.audioLevel), reduceMotion: reduceMotion)
         }
     }
 
@@ -76,11 +79,16 @@ struct DictationHUD: View {
 }
 
 /// A compact voice-reactive level meter (replaces the static recording dot).
+/// When the mic is quiet it gently "breathes" so it reads as alive/listening.
 private struct LevelMeter: View {
     /// Smoothed mic level, 0...1.
     var level: CGFloat
+    var reduceMotion: Bool
+
+    @State private var breathe = false
 
     private static let weights: [CGFloat] = [0.55, 0.9, 1.0, 0.7]
+    private var idle: Bool { level < 0.06 }
 
     var body: some View {
         HStack(spacing: 3) {
@@ -91,7 +99,14 @@ private struct LevelMeter: View {
             }
         }
         .frame(width: 24, height: 22)
+        .opacity(idle && !reduceMotion && breathe ? 0.5 : 1.0)
         .animation(.easeOut(duration: 0.12), value: level)
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
+                breathe = true
+            }
+        }
     }
 
     private func height(_ weight: CGFloat) -> CGFloat {

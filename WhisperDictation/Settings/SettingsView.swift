@@ -14,23 +14,48 @@ struct SettingsView: View {
     @State private var newRight = ""
 
     var body: some View {
-        TabView {
-            general
-                .tabItem { Label("General", systemImage: "gearshape") }
-            model
-                .tabItem { Label("Model", systemImage: "brain") }
-            shortcut
-                .tabItem { Label("Shortcut", systemImage: "keyboard") }
-            dictionary
-                .tabItem { Label("Dictionary", systemImage: "character.book.closed") }
+        VStack(spacing: 0) {
+            header
+            TabView {
+                general
+                    .tabItem { Label("General", systemImage: "gearshape") }
+                model
+                    .tabItem { Label("Model", systemImage: "brain") }
+                shortcut
+                    .tabItem { Label("Shortcut", systemImage: "keyboard") }
+                dictionary
+                    .tabItem { Label("Dictionary", systemImage: "character.book.closed") }
+            }
+            .formStyle(.grouped)
+            .tint(.brand)
         }
-        .formStyle(.grouped)
-        .tint(.brand)
         .frame(width: 480)
         // This is a menu-bar-only (LSUIElement) app, so it isn't active by
         // default. Without activating, the Settings window can't become key and
         // the shortcut recorder never receives keystrokes.
         .onAppear { NSApp.activate(ignoringOtherApps: true) }
+    }
+
+    private var header: some View {
+        HStack(spacing: 12) {
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 44, height: 44)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Whisper Dictation").font(.headline)
+                Text("Version \(Self.appVersion)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 14)
+        .padding(.bottom, 4)
+    }
+
+    private static var appVersion: String {
+        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "—"
     }
 
     private var general: some View {

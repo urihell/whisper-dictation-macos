@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 @main
 struct WhisperDictationApp: App {
@@ -12,7 +13,11 @@ struct WhisperDictationApp: App {
                 .environmentObject(controller)
         } label: {
             Image(systemName: status.symbolName)
-                .symbolEffect(.pulse, isActive: status.state == .recording)
+                .symbolEffect(
+                    .pulse,
+                    isActive: status.state == .recording
+                        && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+                )
         }
 
         Settings {

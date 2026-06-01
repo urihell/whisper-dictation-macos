@@ -15,6 +15,12 @@ final class OverlayController {
 
     private init() {}
 
+    /// Honors the system "Reduce Motion" setting — when on, we skip slide/fade
+    /// and just show/hide instantly.
+    private var reduceMotion: Bool {
+        NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+    }
+
     /// Briefly shows a self-dismissing message (e.g. "Switched to Large v3").
     func toast(_ message: String, duration: TimeInterval = 3) {
         let panel = toastPanel ?? makeToastPanel()
@@ -27,10 +33,31 @@ final class OverlayController {
             let visible = screen.visibleFrame
             panel.setFrameOrigin(NSPoint(x: visible.midX - size.width / 2, y: visible.minY + 220))
         }
-        panel.orderFrontRegardless()
+
+        if reduceMotion {
+            panel.alphaValue = 1
+            panel.orderFrontRegardless()
+        } else {
+            panel.alphaValue = 0
+            panel.orderFrontRegardless()
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.18
+                panel.animator().alphaValue = 1
+            }
+        }
 
         toastHide?.cancel()
-        let work = DispatchWorkItem { [weak panel] in panel?.orderOut(nil) }
+        let work = DispatchWorkItem { [weak self, weak panel] in
+            guard let panel else { return }
+            if self?.reduceMotion ?? true {
+                panel.orderOut(nil)
+            } else {
+                NSAnimationContext.runAnimationGroup({ ctx in
+                    ctx.duration = 0.2
+                    panel.animator().alphaValue = 0
+                }, completionHandler: { panel.orderOut(nil) })
+            }
+        }
         toastHide = work
         DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: work)
     }
@@ -57,21 +84,36 @@ final class OverlayController {
         let panel = panel ?? makePanel()
         self.panel = panel
         reposition(panel)
+        let target = panel.frame.origin
+
+        guard !reduceMotion else {
+            panel.alphaValue = 1
+            panel.orderFrontRegardless()
+            return
+        }
+
+        // Rise + fade in: start a touch lower and transparent, settle to target.
         panel.alphaValue = 0
+        panel.setFrameOrigin(NSPoint(x: target.x, y: target.y - 10))
         panel.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.18
+            ctx.duration = 0.22
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().alphaValue = 1
+            panel.animator().setFrameOrigin(target)
         }
     }
 
     func hide() {
         guard let panel else { return }
+        guard !reduceMotion else { panel.orderOut(nil); return }
+
+        let origin = panel.frame.origin
         NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.14
+            ctx.duration = 0.16
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
             panel.animator().alphaValue = 0
+            panel.animator().setFrameOrigin(NSPoint(x: origin.x, y: origin.y - 8))
         }, completionHandler: { panel.orderOut(nil) })
     }
 
