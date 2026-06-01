@@ -48,8 +48,9 @@ final class StreamingTranscriber: ObservableObject {
     private var confirmedText = ""
     private var tailText = ""
 
-    // Loudest absolute mic RMS seen this session (diagnostic / calibration data).
-    private var maxEnergy: Float = 0
+    // Speech-activity detection (instrumentation-only for now — logged, not gated).
+    private var vad: SpeechActivityDetector?
+    private var fedSamples = 0
 
     private static let placeholder = "Waiting for speech..."
     /// Segments whose no-speech probability exceeds this are dropped (Whisper's
@@ -148,7 +149,8 @@ final class StreamingTranscriber: ObservableObject {
         tailText = ""
         liveText = ""
         audioLevel = 0
-        maxEnergy = 0
+        vad = SpeechActivityDetector()
+        fedSamples = 0
 
         var options = DecodingOptions()
         options.task = .transcribe
@@ -202,11 +204,8 @@ final class StreamingTranscriber: ObservableObject {
             let level = newState.bufferEnergy.suffix(8).max() ?? 0
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                // Absolute RMS of the last ~0.3s — the reliable silence signal.
-                let samples = self.whisperKit?.audioProcessor.audioSamples ?? []
-                let recent = samples.count > 4800 ? Array(samples.suffix(4800)) : Array(samples)
-                let absEnergy = recent.isEmpty ? 0 : AudioProcessor.calculateAverageEnergy(of: recent)
-                self.apply(confirmed: confirmed, unconfirmed: unconfirmed, current: current, absEnergy: absEnergy)
+                self.feedVAD()
+                self.apply(confirmed: confirmed, unconfirmed: unconfirmed, current: current)
                 self.updateLevel(level)
             }
         }
@@ -230,7 +229,8 @@ final class StreamingTranscriber: ObservableObject {
         streamTask = nil
         streamer = nil
         audioLevel = 0
-        Log.info("stop() — maxEnergy=\(maxEnergy)")
+        Log.info("stop() — VAD \(vad?.stats ?? "n/a")")
+        vad = nil
 
         // Insert the FULL transcript so no spoken word is ever dropped. Suppress
         // only when it's empty or just a known silence hallucination.
@@ -281,9 +281,19 @@ final class StreamingTranscriber: ObservableObject {
         audioLevel = audioLevel * 0.6 + clamped * 0.4
     }
 
-    private func apply(confirmed: String, unconfirmed: String, current: String, absEnergy: Float) {
-        maxEnergy = max(maxEnergy, absEnergy)  // diagnostic only — not gated on
+    /// Feeds newly-captured mic samples to the speech detector (instrumentation).
+    private func feedVAD() {
+        guard let samples = whisperKit?.audioProcessor.audioSamples else { return }
+        let n = samples.count
+        if fedSamples < n {
+            vad?.analyze(Array(samples[fedSamples..<n]))
+            fedSamples = n
+        } else if fedSamples > n {
+            fedSamples = n  // buffer was purged/reset
+        }
+    }
 
+    private func apply(confirmed: String, unconfirmed: String, current: String) {
         confirmedText = confirmed
         let isIdle = (current == Self.placeholder)
         var livePartial = isIdle ? "" : current
