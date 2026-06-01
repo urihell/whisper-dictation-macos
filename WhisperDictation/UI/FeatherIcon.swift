@@ -23,34 +23,31 @@ enum FeatherIcon {
             ctx.translateBy(x: -50, y: -50)
 
             let color = tint ?? .black
-            color.setFill()
             color.setStroke()
 
-            // Vane with a knocked-out central vein (even-odd), so it reads as a
-            // feather rather than a leaf. Bold + tall to match neighboring icons.
-            let feather = NSBezierPath()
-            feather.windingRule = .evenOdd
-            // Outer blade — pointed at the top, tapering to the base.
-            feather.move(to: NSPoint(x: 50, y: 14))
-            feather.curve(to: NSPoint(x: 50, y: 96),
-                          controlPoint1: NSPoint(x: 24, y: 42),
-                          controlPoint2: NSPoint(x: 37, y: 82))
-            feather.curve(to: NSPoint(x: 50, y: 14),
-                          controlPoint1: NSPoint(x: 63, y: 82),
-                          controlPoint2: NSPoint(x: 76, y: 42))
-            feather.close()
-            // Central vein (becomes a hole under even-odd).
-            feather.appendRect(NSRect(x: 47, y: 26, width: 6, height: 58))
-            feather.fill()
+            // Central shaft (rachis) + quill tail.
+            let shaft = NSBezierPath()
+            shaft.move(to: NSPoint(x: 50, y: 95))
+            shaft.line(to: NSPoint(x: 50, y: 4))
+            shaft.lineWidth = 6
+            shaft.lineCapStyle = .round
+            shaft.stroke()
 
-            // Quill: the tail below the vane — the feather's tell. (Kept below the
-            // blade so it doesn't fill in the vein gap above.)
-            let quill = NSBezierPath()
-            quill.move(to: NSPoint(x: 50, y: 20))
-            quill.line(to: NSPoint(x: 50, y: 3))
-            quill.lineWidth = 6
-            quill.lineCapStyle = .round
-            quill.stroke()
+            // Barbs sweeping up toward the tip — the herringbone that makes it
+            // read as a feather (not a leaf). Length follows a leaf envelope.
+            let barbs = NSBezierPath()
+            barbs.lineWidth = 5
+            barbs.lineCapStyle = .round
+            for y: CGFloat in [30, 42, 54, 66, 78] {
+                let t = Double((y - 14) / 78)            // 0…~0.8 along the blade
+                let len = CGFloat(sin(Double.pi * t)) * 33
+                let up = len * 0.5
+                barbs.move(to: NSPoint(x: 49, y: y))
+                barbs.line(to: NSPoint(x: 49 - len, y: y + up))
+                barbs.move(to: NSPoint(x: 51, y: y))
+                barbs.line(to: NSPoint(x: 51 + len, y: y + up))
+            }
+            barbs.stroke()
             ctx.restoreGState()
             return true
         }
