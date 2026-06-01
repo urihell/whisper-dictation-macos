@@ -80,7 +80,9 @@ struct DictationHUD: View {
         var text = AttributedString(displayText)
         if showsCaret {
             var caret = AttributedString("▍")   // chunky bar — reads as a cursor
-            caret.foregroundColor = .brand.opacity(reduceMotion ? 1 : caretOpacity)
+            // .primary matches the text: brightest in both themes (white on dark,
+            // black on light) and adapts automatically — unlike a fixed color.
+            caret.foregroundColor = .primary.opacity(reduceMotion ? 1 : caretOpacity)
             text += caret
         }
         return text
