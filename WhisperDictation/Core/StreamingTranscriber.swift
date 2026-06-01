@@ -316,15 +316,12 @@ final class StreamingTranscriber: ObservableObject {
         let candidate = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
 
         if vadSuppresses {
-            // No speech detected this session — keep "Listening…" so accumulating
-            // silence hallucinations never appear.
+            // Confirmed silent session — keep "Listening…".
             liveText = ""
-        } else if isIdle {
-            // Silence/gap: publish the (filtered) authoritative text even when
-            // empty, so a known hallucination clears instead of sticking.
-            liveText = candidate
-        } else if !candidate.isEmpty {
-            // Hold the last text through transient empties (anti-flicker).
+        } else if !isIdle, candidate.count > liveText.count {
+            // Active speech: repaint only as the transcript GROWS, so the HUD
+            // doesn't visibly rewrite itself on every re-decode wobble. During
+            // pauses/gaps (isIdle) we freeze instead of repainting.
             liveText = candidate
         }
     }
