@@ -23,10 +23,13 @@ final class StatusController: ObservableObject {
         !accessibilityTrusted && state == .idle
     }
 
-    /// The feather glyph for the menu bar: monochrome (template) at rest, solid
-    /// indigo while a dictation session is active.
+    /// The menu-bar glyph (mic → text). Template image: monochrome and adapts to
+    /// the menu bar in light/dark.
     var menuBarImage: NSImage {
-        FeatherIcon.image(tint: state == .idle ? nil : .brand)
+        let img = NSImage(named: "MenuBarGlyph") ?? NSImage()
+        img.isTemplate = true
+        img.size = NSSize(width: 18, height: 18)
+        return img
     }
 
     private init() {}
