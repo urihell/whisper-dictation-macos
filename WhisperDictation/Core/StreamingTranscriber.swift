@@ -50,6 +50,9 @@ final class StreamingTranscriber: ObservableObject {
     /// Called on the main actor when a background model load finishes and that
     /// model becomes active. The argument is the model name.
     var onModelReady: ((String) -> Void)?
+    /// Called on the main actor when a background model load fails (e.g. no
+    /// network on first download). The argument is the model name.
+    var onModelLoadFailed: ((String) -> Void)?
 
     private var whisperKit: WhisperKit?
     private var loadedModelName: String?
@@ -82,11 +85,15 @@ final class StreamingTranscriber: ObservableObject {
         // verbose:false / logLevel:.error keep WhisperKit from logging load and
         // decode details (incl. decoded text) to the unified log — matching this
         // app's privacy posture.
+        // prewarm: load-unload-load each model so Core ML specializes it for this
+        // chip with low peak memory — defensive against the specialized-model
+        // cache being evicted after an OS update. Tiny cost when the cache is warm.
         let config = WhisperKitConfig(
             model: modelName,
             downloadBase: base,
             verbose: false,
             logLevel: .error,
+            prewarm: true,
             load: true
         )
         let wk = try await WhisperKit(config)
@@ -115,6 +122,7 @@ final class StreamingTranscriber: ObservableObject {
             } catch {
                 self.loadingModel = nil
                 Log.error("Background model load failed for '\(modelName)': \(error.localizedDescription)")
+                self.onModelLoadFailed?(modelName)
             }
         }
     }

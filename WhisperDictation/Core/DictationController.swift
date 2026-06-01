@@ -34,6 +34,11 @@ final class DictationController: ObservableObject {
             }
             self.announcedFirstModel = true
         }
+        transcriber.onModelLoadFailed = { modelName in
+            OverlayController.shared.toast(
+                "⚠️ Couldn't load \(Self.friendlyModelName(modelName)) — check your internet connection"
+            )
+        }
     }
 
     /// Loads the configured model in the background so it's ready (or compiling)
@@ -213,6 +218,7 @@ final class DictationController: ObservableObject {
         stopSessionKeys()
         lastError = error.localizedDescription
         Log.error("Dictation failed: \(error.localizedDescription)")
+        OverlayController.shared.toast("⚠️ \(error.localizedDescription)")
         setState(.idle)
     }
 }
