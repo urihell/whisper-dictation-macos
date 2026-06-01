@@ -63,6 +63,10 @@ final class StreamingTranscriber: ObservableObject {
     // Latest pieces from the stream callback.
     private var confirmedText = ""
     private var tailText = ""
+    /// The last text we chose to display — used to suppress transient backward
+    /// truncations of the live tail (which read as flicker) without hiding real
+    /// corrections or growth.
+    private var lastShown = ""
 
     // Speech-activity detection (SoundAnalysis) used to suppress silent sessions.
     private var vad: SpeechActivityDetector?
@@ -181,6 +185,7 @@ final class StreamingTranscriber: ObservableObject {
 
         confirmedText = ""
         tailText = ""
+        lastShown = ""
         liveText = ""
         audioLevel = 0
         vad = SpeechActivityDetector()
@@ -350,14 +355,22 @@ final class StreamingTranscriber: ObservableObject {
     private func publish(candidate: String, isIdle: Bool) {
         if vadSuppresses {
             // Confirmed silent session — keep "Listening…".
+            lastShown = ""
             liveTextSubject.send("")
-        } else if !isIdle {
-            // Active speech: publish the full latest transcript (so corrections
-            // are visible too), coalesced by the throttle so it can't strobe.
-            // During pauses (isIdle) we emit nothing — the HUD holds the last
-            // text rather than churning.
-            liveTextSubject.send(candidate)
+            return
         }
+        // During pauses (isIdle) emit nothing — the HUD holds the last text.
+        guard !isIdle else { return }
+        // Suppress a transient backward truncation of the live tail: if the new
+        // candidate is just a shorter PREFIX of what's already shown, the tail is
+        // mid-redecode and will regrow — holding the longer text avoids the
+        // backward "jump". Growth and genuine corrections (which diverge, not
+        // truncate) still publish immediately, so responsiveness is unaffected.
+        if !lastShown.isEmpty, lastShown.hasPrefix(candidate), candidate.count < lastShown.count {
+            return
+        }
+        lastShown = candidate
+        liveTextSubject.send(candidate)
     }
 
     /// Strips Whisper special tokens and non-speech annotations (e.g.
