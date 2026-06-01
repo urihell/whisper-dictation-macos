@@ -48,12 +48,26 @@ final class StreamingTranscriber: ObservableObject {
     private var confirmedText = ""
     private var tailText = ""
 
+    // Voice gate state (absolute-energy VAD).
+    private var lastVoiceAt: Date = .distantPast
+    private var heardSpeech = false
+    private var voicedTranscript = ""
+    private var maxEnergy: Float = 0
+
     private static let placeholder = "Waiting for speech..."
     /// Segments whose no-speech probability exceeds this are dropped. Whisper
     /// hallucinates phrases (notably "Thank you.") on silence/near-silence;
     /// genuine speech has a low noSpeechProb, so this won't suppress real words.
     /// Slightly more aggressive than Whisper's 0.6 default to favor suppression.
     private static let noSpeechThreshold: Float = 0.5
+    /// Absolute mic RMS below this counts as silence. WhisperKit's VAD uses
+    /// *relative* energy (normalized to recent peaks), which clears its
+    /// threshold even in a quiet room and lets the decoder hallucinate; absolute
+    /// loudness is the reliable, content-agnostic signal. Tunable per mic/gain.
+    private static let speechEnergyFloor: Float = 0.015
+    /// Keep accepting transcript for this long after the last voiced audio, so
+    /// the final word isn't clipped as you stop speaking.
+    private static let voiceHold: TimeInterval = 1.0
 
     var isLoaded: Bool { whisperKit != nil }
 
@@ -147,6 +161,10 @@ final class StreamingTranscriber: ObservableObject {
         tailText = ""
         liveText = ""
         audioLevel = 0
+        lastVoiceAt = .distantPast
+        heardSpeech = false
+        voicedTranscript = ""
+        maxEnergy = 0
 
         var options = DecodingOptions()
         options.task = .transcribe
@@ -196,11 +214,16 @@ final class StreamingTranscriber: ObservableObject {
             let confirmed = newState.confirmedSegments.filter(Self.isSpeechSegment).map(\.text).joined(separator: " ")
             let unconfirmed = newState.unconfirmedSegments.filter(Self.isSpeechSegment).map(\.text).joined(separator: " ")
             let current = newState.currentText
-            // Recent peak mic energy (already normalized 0...1) for the meter.
+            // Recent peak relative energy (0...1) for the meter's liveliness.
             let level = newState.bufferEnergy.suffix(8).max() ?? 0
             Task { @MainActor [weak self] in
-                self?.apply(confirmed: confirmed, unconfirmed: unconfirmed, current: current)
-                self?.updateLevel(level)
+                guard let self else { return }
+                // Absolute RMS of the last ~0.3s — the reliable silence signal.
+                let samples = self.whisperKit?.audioProcessor.audioSamples ?? []
+                let recent = samples.count > 4800 ? Array(samples.suffix(4800)) : Array(samples)
+                let absEnergy = recent.isEmpty ? 0 : AudioProcessor.calculateAverageEnergy(of: recent)
+                self.apply(confirmed: confirmed, unconfirmed: unconfirmed, current: current, absEnergy: absEnergy)
+                self.updateLevel(level)
             }
         }
 
@@ -223,19 +246,14 @@ final class StreamingTranscriber: ObservableObject {
         streamTask = nil
         streamer = nil
         audioLevel = 0
-        let cleaned = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
+        Log.info("stop() — heardSpeech=\(heardSpeech), maxEnergy=\(maxEnergy), floor=\(Self.speechEnergyFloor)")
 
-        // Backstop for the no-confirmed-speech race: if dictation ended while a
-        // silent buffer was still mid-decode, the result rests entirely on the
-        // live partial, which carries no noSpeechProb to filter. Drop it when no
-        // speech was ever confirmed and the text is only a known silence
-        // hallucination (e.g. "Thank you."). Anything confirmed, or any phrase
-        // outside the known set, is left untouched — so real words survive.
-        if confirmedText.isEmpty, Self.isLikelySilenceHallucination(cleaned) {
-            Log.info("stop() — dropped likely silence hallucination (no speech confirmed)")
-            return ""
-        }
-        return Self.applyReplacements(cleaned, AppSettings.shared.replacements)
+        // Insert only what was captured while real voice was present. This drops
+        // trailing silence hallucinations and yields nothing for a session with
+        // no speech at all.
+        let spoken = heardSpeech ? voicedTranscript : ""
+        guard !spoken.isEmpty, !Self.isLikelySilenceHallucination(spoken) else { return "" }
+        return Self.applyReplacements(spoken, AppSettings.shared.replacements)
     }
 
     /// Common Whisper hallucinations on silence (YouTube-caption training
@@ -280,34 +298,39 @@ final class StreamingTranscriber: ObservableObject {
         audioLevel = audioLevel * 0.6 + clamped * 0.4
     }
 
-    private func apply(confirmed: String, unconfirmed: String, current: String) {
+    private func apply(confirmed: String, unconfirmed: String, current: String, absEnergy: Float) {
+        // Absolute-energy voice gate, with a short trailing hold so the last
+        // word isn't clipped as you stop speaking. This is the real defense
+        // against silence hallucinations: no genuine loudness → no transcript.
+        maxEnergy = max(maxEnergy, absEnergy)
+        if absEnergy > Self.speechEnergyFloor { lastVoiceAt = Date() }
+        let hasVoice = Date().timeIntervalSince(lastVoiceAt) < Self.voiceHold
+
         confirmedText = confirmed
-        // Prefer the live partial decode; fall back to the last segmented tail.
         let isIdle = (current == Self.placeholder)
         var livePartial = isIdle ? "" : current
-        // The live partial has no noSpeechProb to check, so guard it by text:
-        // before any real speech is confirmed, drop a standalone known
-        // hallucination (e.g. "Thank you." flashing during silence).
+        // Belt-and-suspenders: the live partial has no noSpeechProb, so before
+        // any real speech, drop a standalone known hallucination by text too.
         if confirmed.isEmpty, Self.isLikelySilenceHallucination(livePartial) {
             livePartial = ""
         }
         tailText = livePartial.isEmpty ? unconfirmed : livePartial
-
-        // `liveText` is display-only (the inserted text is recomputed in stop()
-        // from confirmedText/tailText). WhisperKit resets currentText to "" /
-        // "Waiting for speech..." between decode windows and during VAD silence.
         let candidate = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
-        if isIdle {
-            // Silence/gap: no live partial is in flight, so the (already
-            // no-speech-filtered) authoritative text is trustworthy. Publish it
-            // even when empty, so a brief silence hallucination clears from the
-            // HUD instead of sticking there.
-            liveText = candidate
-        } else if !candidate.isEmpty {
-            // Active decode: hold the last text through transient empties so the
-            // HUD doesn't flicker to "Listening…" between decode windows.
-            liveText = candidate
+
+        if hasVoice {
+            // Real audio present — accept the transcript and remember it. The
+            // inserted text comes from this snapshot (see stop()).
+            heardSpeech = true
+            if !candidate.isEmpty {
+                liveText = candidate
+                voicedTranscript = candidate
+            }
+        } else if !heardSpeech {
+            // Silence and nothing said yet — keep the HUD on "Listening…".
+            liveText = ""
         }
+        // else: silence after speech — freeze the HUD at the last voiced text,
+        // so accumulating hallucinations never appear or get inserted.
     }
 
     /// Strips Whisper special tokens and non-speech annotations (e.g.
