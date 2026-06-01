@@ -36,7 +36,7 @@ final class StreamingTranscriber: ObservableObject {
 
     init() {
         liveTextCancellable = liveTextSubject
-            .throttle(for: .milliseconds(90), scheduler: RunLoop.main, latest: true)
+            .throttle(for: .milliseconds(60), scheduler: RunLoop.main, latest: true)
             .removeDuplicates()
             .sink { [weak self] text in self?.liveText = text }
     }
