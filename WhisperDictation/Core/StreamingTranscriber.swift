@@ -48,7 +48,7 @@ final class StreamingTranscriber: ObservableObject {
     private var confirmedText = ""
     private var tailText = ""
 
-    // Speech-activity detection (instrumentation-only for now — logged, not gated).
+    // Speech-activity detection (SoundAnalysis) used to suppress silent sessions.
     private var vad: SpeechActivityDetector?
     private var fedSamples = 0
 
@@ -229,13 +229,15 @@ final class StreamingTranscriber: ObservableObject {
         streamTask = nil
         streamer = nil
         audioLevel = 0
-        Log.info("stop() — VAD \(vad?.stats ?? "n/a")")
+        let suppress = vadSuppresses
+        Log.info("stop() — VAD \(vad?.stats ?? "n/a"), suppress=\(suppress)")
         vad = nil
 
         // Insert the FULL transcript so no spoken word is ever dropped. Suppress
-        // only when it's empty or just a known silence hallucination.
+        // only when the detector confirmed a silent session, or the text is empty
+        // or just a known silence hallucination.
         let cleaned = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
-        guard !cleaned.isEmpty, !Self.isLikelySilenceHallucination(cleaned) else { return "" }
+        guard !suppress, !cleaned.isEmpty, !Self.isLikelySilenceHallucination(cleaned) else { return "" }
         return Self.applyReplacements(cleaned, AppSettings.shared.replacements)
     }
 
@@ -281,7 +283,15 @@ final class StreamingTranscriber: ObservableObject {
         audioLevel = audioLevel * 0.6 + clamped * 0.4
     }
 
-    /// Feeds newly-captured mic samples to the speech detector (instrumentation).
+    /// True only when the detector ran long enough to be confident the session
+    /// contained NO speech. Fail-open: unavailable detector, or too few results
+    /// yet (short utterances), returns false — so real speech is never dropped.
+    private var vadSuppresses: Bool {
+        guard let vad else { return false }
+        return vad.resultCount >= 3 && !vad.everSpeech
+    }
+
+    /// Feeds newly-captured mic samples to the speech detector.
     private func feedVAD() {
         guard let samples = whisperKit?.audioProcessor.audioSamples else { return }
         let n = samples.count
@@ -305,7 +315,11 @@ final class StreamingTranscriber: ObservableObject {
         tailText = livePartial.isEmpty ? unconfirmed : livePartial
         let candidate = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
 
-        if isIdle {
+        if vadSuppresses {
+            // No speech detected this session — keep "Listening…" so accumulating
+            // silence hallucinations never appear.
+            liveText = ""
+        } else if isIdle {
             // Silence/gap: publish the (filtered) authoritative text even when
             // empty, so a known hallucination clears instead of sticking.
             liveText = candidate

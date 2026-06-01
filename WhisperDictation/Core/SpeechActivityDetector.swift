@@ -60,6 +60,7 @@ final class SpeechActivityDetector: NSObject, SNResultsObserving {
 
     var everSpeech: Bool { lock.withLock { _everSpeech } }
     var maxSpeechConfidence: Double { lock.withLock { _maxSpeechConfidence } }
+    var resultCount: Int { lock.withLock { _resultCount } }
 
     /// One-line summary for diagnostics/calibration.
     var stats: String {
