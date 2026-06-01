@@ -54,23 +54,37 @@ glyph_black = Image.merge("RGBA", (zero, zero, zero, alpha))
 # ---- Menu-bar template ----
 # The full glyph is too detailed at 18px, so use just the microphone (the left
 # part), split at the widest internal vertical gap between mic and text lines.
-# The artwork's mic is a HALF mic (flat down the middle). Mirror it about that
-# flat edge to make a whole, symmetric microphone for the menu bar.
+# Keep the artwork's composition (half-mic + text lines), but rebuild the text
+# side as a few BOLD, well-spaced bars so it stays legible at menu-bar size
+# (the original's ~7 thin lines merge into a blob when shrunk).
 split = int(gw * 0.46)
-half = glyph_black.crop((0, 0, split, gh))
-flip = half.transpose(Image.FLIP_LEFT_RIGHT)
-full = Image.new("RGBA", (split * 2, gh), (0, 0, 0, 0))
-full.paste(half, (0, 0), half)
-full.paste(flip, (split, 0), flip)
-mic = full.crop(full.getbbox())  # trim transparent margin
+mic = glyph_black.crop((0, 0, split, gh))
+mic = mic.crop(mic.getbbox())
 mw, mh = mic.size
 
-side = max(mw, mh)
-pad = int(side * 0.08)
-mb = Image.new("RGBA", (side + 2 * pad, side + 2 * pad), (0, 0, 0, 0))
-mb.paste(mic, ((mb.width - mw) // 2, (mb.height - mh) // 2), mic)
+gap = int(mw * 0.34)
+bar_area = int(mw * 1.2)
+comp = Image.new("RGBA", (mw + gap + bar_area, mh), (0, 0, 0, 0))
+comp.paste(mic, (0, 0), mic)
+
+draw = ImageDraw.Draw(comp)
+bars = [1.0, 0.6, 0.85, 0.5]            # relative widths, top → bottom
+thick = int(mh * 0.12)
+vgap = int(mh * 0.11)
+total = len(bars) * thick + (len(bars) - 1) * vgap
+y = (mh - total) // 2
+x0 = mw + gap
+for relw in bars:
+    w = int(bar_area * relw)
+    draw.rounded_rectangle((x0, y, x0 + w, y + thick), radius=thick // 2, fill=(0, 0, 0, 255))
+    y += thick + vgap
+
+pad = int(mh * 0.06)
+canvas = Image.new("RGBA", (comp.width + 2 * pad, comp.height + 2 * pad), (0, 0, 0, 0))
+canvas.paste(comp, (pad, pad), comp)
 os.makedirs(MENUSET, exist_ok=True)
-mb.resize((72, 72), Image.LANCZOS).save(f"{MENUSET}/glyph.png")
+sc = 72 / canvas.height
+canvas.resize((round(canvas.width * sc), 72), Image.LANCZOS).save(f"{MENUSET}/glyph.png")
 with open(f"{MENUSET}/Contents.json", "w") as f:
     f.write(
         '{\n  "images" : [ { "idiom" : "universal", "filename" : "glyph.png", "scale" : "1x" } ],\n'

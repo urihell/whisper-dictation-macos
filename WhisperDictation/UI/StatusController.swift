@@ -28,7 +28,10 @@ final class StatusController: ObservableObject {
     var menuBarImage: NSImage {
         let img = NSImage(named: "MenuBarGlyph") ?? NSImage()
         img.isTemplate = true
-        img.size = NSSize(width: 18, height: 18)
+        let h: CGFloat = 18
+        if img.size.height > 0 {
+            img.size = NSSize(width: (h * img.size.width / img.size.height).rounded(), height: h)
+        }
         return img
     }
 
