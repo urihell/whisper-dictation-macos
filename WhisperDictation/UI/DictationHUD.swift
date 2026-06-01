@@ -5,6 +5,7 @@ struct DictationHUD: View {
     @ObservedObject var transcriber: StreamingTranscriber
     @ObservedObject var controller: DictationController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var caretOpacity: Double = 1
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -14,12 +15,18 @@ struct DictationHUD: View {
 
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
-                    Text(displayText)
+                    Text(hudText)
                         .font(.system(size: 15, weight: .medium, design: .rounded))
                         .foregroundStyle(.primary)
                         .multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .id(Self.textAnchor)
+                        .onAppear {
+                            guard !reduceMotion else { return }
+                            withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
+                                caretOpacity = 0.15
+                            }
+                        }
                 }
                 .frame(height: 72) // ~4 lines; longer text scrolls
                 .onChange(of: displayText) {
@@ -60,6 +67,23 @@ struct DictationHUD: View {
         default:
             LevelMeter(level: CGFloat(transcriber.audioLevel), reduceMotion: reduceMotion)
         }
+    }
+
+    /// A blinking caret follows the live transcript while recording — signals
+    /// "still listening / more coming" and that this text will be typed.
+    private var showsCaret: Bool {
+        controller.state == .recording && !transcriber.liveText.isEmpty
+    }
+
+    /// The HUD text, with a brand-tinted caret appended while recording.
+    private var hudText: AttributedString {
+        var text = AttributedString(displayText)
+        if showsCaret {
+            var caret = AttributedString("▏")
+            caret.foregroundColor = .brand.opacity(reduceMotion ? 1 : caretOpacity)
+            text += caret
+        }
+        return text
     }
 
     private var displayText: String {
