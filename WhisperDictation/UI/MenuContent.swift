@@ -31,6 +31,14 @@ struct MenuContent: View {
             NSApplication.shared.terminate(nil)
         }
         .keyboardShortcut("q", modifiers: .command)
+
+        Divider()
+
+        Text("Whisper Dictation v\(Self.appVersion)")
+    }
+
+    static var appVersion: String {
+        (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "—"
     }
 
     private var statusText: String {
