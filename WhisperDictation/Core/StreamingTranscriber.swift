@@ -52,7 +52,8 @@ final class StreamingTranscriber: ObservableObject {
     /// Segments whose no-speech probability exceeds this are dropped. Whisper
     /// hallucinates phrases (notably "Thank you.") on silence/near-silence;
     /// genuine speech has a low noSpeechProb, so this won't suppress real words.
-    private static let noSpeechThreshold: Float = 0.6
+    /// Slightly more aggressive than Whisper's 0.6 default to favor suppression.
+    private static let noSpeechThreshold: Float = 0.5
 
     var isLoaded: Bool { whisperKit != nil }
 
@@ -155,6 +156,13 @@ final class StreamingTranscriber: ObservableObject {
         // withoutTimestamps — the streaming segment confirmation needs them.)
         options.skipSpecialTokens = true
         options.suppressBlank = true
+        // Anti-hallucination guards (OpenAI Whisper's standard thresholds). On
+        // silence/near-silence the decoder otherwise emits artifacts like
+        // "Thank you." These mark such output as no-speech / low-confidence so it
+        // is dropped or retried rather than surfaced.
+        options.noSpeechThreshold = 0.6
+        options.logProbThreshold = -1.0
+        options.compressionRatioThreshold = 2.4
 
         // Custom vocabulary: seed the decoder prompt with the user's terms so
         // names/jargon are recognized. Opt-in — setting promptTokens disables
@@ -175,7 +183,11 @@ final class StreamingTranscriber: ObservableObject {
             textDecoder: whisperKit.textDecoder,
             tokenizer: tokenizer,
             audioProcessor: whisperKit.audioProcessor,
-            decodingOptions: options
+            decodingOptions: options,
+            // Raise WhisperKit's VAD silence threshold (default 0.3) so quiet
+            // background noise between words is treated as silence and skipped
+            // rather than decoded into hallucinations.
+            silenceThreshold: 0.4
         ) { [weak self] _, newState in
             // Runs in the actor's context. Reduce to Sendable Strings here,
             // then hop to the main actor to publish. Drop high no-speech-
