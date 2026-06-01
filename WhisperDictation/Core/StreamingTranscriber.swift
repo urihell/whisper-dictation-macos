@@ -97,15 +97,16 @@ final class StreamingTranscriber: ObservableObject {
         // verbose:false / logLevel:.error keep WhisperKit from logging load and
         // decode details (incl. decoded text) to the unified log — matching this
         // app's privacy posture.
-        // prewarm: load-unload-load each model so Core ML specializes it for this
-        // chip with low peak memory — defensive against the specialized-model
-        // cache being evicted after an OS update. Tiny cost when the cache is warm.
+        // No prewarm: it load-unload-loads to trigger Core ML specialization with
+        // lower peak memory, but the docs note it ~doubles load time. On a cold
+        // cache (download + first ANE specialization is already slow) that made
+        // first use painfully long. Fast first run matters more here than the
+        // marginal peak-memory saving.
         let config = WhisperKitConfig(
             model: modelName,
             downloadBase: base,
             verbose: false,
             logLevel: .error,
-            prewarm: true,
             load: true
         )
         let wk = try await WhisperKit(config)
