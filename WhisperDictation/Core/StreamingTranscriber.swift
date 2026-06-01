@@ -36,7 +36,7 @@ final class StreamingTranscriber: ObservableObject {
 
     init() {
         liveTextCancellable = liveTextSubject
-            .throttle(for: .milliseconds(130), scheduler: RunLoop.main, latest: true)
+            .throttle(for: .milliseconds(90), scheduler: RunLoop.main, latest: true)
             .removeDuplicates()
             .sink { [weak self] text in self?.liveText = text }
     }
@@ -67,6 +67,8 @@ final class StreamingTranscriber: ObservableObject {
     /// truncations of the live tail (which read as flicker) without hiding real
     /// corrections or growth.
     private var lastShown = ""
+    /// Language for this session (nil = auto), reused for the final pass on stop.
+    private var sessionLanguage: String?
 
     // Speech-activity detection (SoundAnalysis) used to suppress silent sessions.
     private var vad: SpeechActivityDetector?
@@ -103,6 +105,36 @@ final class StreamingTranscriber: ObservableObject {
         let wk = try await WhisperKit(config)
         Log.info("Model '\(modelName)' loaded. tokenizer=\(wk.tokenizer != nil)")
         return wk
+    }
+
+    /// Base decoding options shared by the live stream and the final pass:
+    /// transcribe task, language, and Whisper's standard anti-hallucination
+    /// thresholds.
+    private static func baseDecodeOptions(language: String?) -> DecodingOptions {
+        var o = DecodingOptions()
+        o.task = .transcribe
+        o.language = language
+        o.detectLanguage = (language == nil)
+        o.skipSpecialTokens = true
+        o.suppressBlank = true
+        o.noSpeechThreshold = 0.6
+        o.logProbThreshold = -1.0
+        o.compressionRatioThreshold = 2.4
+        return o
+    }
+
+    /// Base options plus the user's custom-vocabulary prompt (opt-in; setting
+    /// promptTokens disables WhisperKit's prefill cache, which slows streaming).
+    private func decodeOptions(language: String?, tokenizer: any WhisperTokenizer) -> DecodingOptions {
+        var o = Self.baseDecodeOptions(language: language)
+        let terms = AppSettings.shared.vocabularyTerms.filter { !$0.isEmpty }
+        if AppSettings.shared.vocabularyBiasing, !terms.isEmpty {
+            var tokens = tokenizer.encode(text: " " + terms.joined(separator: ", "))
+            if tokens.count > 200 { tokens = Array(tokens.suffix(200)) }
+            o.promptTokens = tokens
+            o.usePrefillPrompt = true
+        }
+        return o
     }
 
     /// Loads `modelName` in the background and switches to it when ready, while
@@ -191,33 +223,8 @@ final class StreamingTranscriber: ObservableObject {
         vad = SpeechActivityDetector()
         fedSamples = 0
 
-        var options = DecodingOptions()
-        options.task = .transcribe
-        options.language = language
-        options.detectLanguage = (language == nil)
-        // Suppress non-speech / blank output at the source. (Not setting
-        // withoutTimestamps — the streaming segment confirmation needs them.)
-        options.skipSpecialTokens = true
-        options.suppressBlank = true
-        // Anti-hallucination guards (OpenAI Whisper's standard thresholds). On
-        // silence/near-silence the decoder otherwise emits artifacts like
-        // "Thank you." These mark such output as no-speech / low-confidence so it
-        // is dropped or retried rather than surfaced.
-        options.noSpeechThreshold = 0.6
-        options.logProbThreshold = -1.0
-        options.compressionRatioThreshold = 2.4
-
-        // Custom vocabulary: seed the decoder prompt with the user's terms so
-        // names/jargon are recognized. Opt-in — setting promptTokens disables
-        // WhisperKit's prefill cache, which slows live streaming noticeably.
-        let terms = AppSettings.shared.vocabularyTerms.filter { !$0.isEmpty }
-        if AppSettings.shared.vocabularyBiasing, !terms.isEmpty {
-            var tokens = tokenizer.encode(text: " " + terms.joined(separator: ", "))
-            if tokens.count > 200 { tokens = Array(tokens.suffix(200)) }
-            options.promptTokens = tokens
-            options.usePrefillPrompt = true
-            Log.info("Vocabulary prompt: \(terms.count) terms, \(tokens.count) tokens (prefill cache off)")
-        }
+        sessionLanguage = language
+        let options = decodeOptions(language: language, tokenizer: tokenizer)
 
         let streamer = AudioStreamTranscriber(
             audioEncoder: whisperKit.audioEncoder,
@@ -272,6 +279,8 @@ final class StreamingTranscriber: ObservableObject {
 
     /// Stops streaming and returns the cleaned final transcript.
     func stop() async -> String {
+        // Capture the full captured audio before tearing the stream down.
+        let samples = whisperKit?.audioProcessor.audioSamples
         await streamer?.stopStreamTranscription()
         streamTask?.cancel()
         streamTask = nil
@@ -281,13 +290,34 @@ final class StreamingTranscriber: ObservableObject {
         Log.info("stop() — VAD \(vad?.stats ?? "n/a"), suppress=\(suppress)")
         vad = nil
 
-        // Insert the FULL transcript so no spoken word is ever dropped. Suppress
-        // only when the detector confirmed a silent session, or the text is empty
-        // or just a known silence hallucination.
-        let cleaned = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
-        guard !suppress, !cleaned.isEmpty, !Self.isLikelySilenceHallucination(cleaned) else { return "" }
-        return Self.applyReplacements(cleaned, AppSettings.shared.replacements)
+        guard !suppress else { return "" }
+
+        // The streaming results are missing the last ~second of audio (the loop
+        // decodes in windows and hasn't processed the final buffer). Re-transcribe
+        // the whole utterance for a complete, full-context result; fall back to
+        // the streamed text if that fails.
+        var text = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
+        if let whisperKit, let tokenizer = whisperKit.tokenizer,
+           let samples, samples.count > Int(Self.sampleRate * 0.3) {
+            var opts = decodeOptions(language: sessionLanguage, tokenizer: tokenizer)
+            opts.chunkingStrategy = .vad   // handle long utterances cleanly
+            if let results = try? await whisperKit.transcribe(audioArray: Array(samples), decodeOptions: opts),
+               !results.isEmpty {
+                let joined = results
+                    .flatMap { $0.segments }
+                    .filter(Self.isSpeechSegment)
+                    .map(\.text)
+                    .joined(separator: " ")
+                let cleaned = Self.clean(joined)
+                if !cleaned.isEmpty { text = cleaned }
+            }
+        }
+
+        guard !text.isEmpty, !Self.isLikelySilenceHallucination(text) else { return "" }
+        return Self.applyReplacements(text, AppSettings.shared.replacements)
     }
+
+    private static let sampleRate: Double = 16_000
 
     /// Common Whisper hallucinations on silence (YouTube-caption training
     /// artifacts). Used only as a backstop when nothing was confirmed.
