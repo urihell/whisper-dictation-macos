@@ -9,6 +9,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // injection). Non-blocking — the system shows its own prompt.
         TextInserter.ensureAccessibilityPermission(prompt: true)
 
+        // Track Accessibility trust so the menu bar can warn when typing is
+        // blocked (and clear the warning once the user grants it).
+        StatusController.shared.startMonitoring()
+
         // Start loading the configured model in the background so the first
         // dictation isn't blocked on download/compile.
         DictationController.shared.preloadModel()

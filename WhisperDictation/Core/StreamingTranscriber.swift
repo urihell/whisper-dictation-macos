@@ -206,7 +206,33 @@ final class StreamingTranscriber: ObservableObject {
         streamTask = nil
         streamer = nil
         let cleaned = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
+
+        // Backstop for the no-confirmed-speech race: if dictation ended while a
+        // silent buffer was still mid-decode, the result rests entirely on the
+        // live partial, which carries no noSpeechProb to filter. Drop it when no
+        // speech was ever confirmed and the text is only a known silence
+        // hallucination (e.g. "Thank you."). Anything confirmed, or any phrase
+        // outside the known set, is left untouched — so real words survive.
+        if confirmedText.isEmpty, Self.isLikelySilenceHallucination(cleaned) {
+            Log.info("stop() — dropped likely silence hallucination (no speech confirmed)")
+            return ""
+        }
         return Self.applyReplacements(cleaned, AppSettings.shared.replacements)
+    }
+
+    /// Common Whisper hallucinations on silence (YouTube-caption training
+    /// artifacts). Used only as a backstop when nothing was confirmed.
+    private static let silenceHallucinations: Set<String> = [
+        "thank you",
+        "thank you very much",
+        "thanks for watching",
+        "thank you for watching",
+    ]
+
+    private static func isLikelySilenceHallucination(_ text: String) -> Bool {
+        let trim = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ".,!?…"))
+        let normalized = text.lowercased().trimmingCharacters(in: trim)
+        return silenceHallucinations.contains(normalized)
     }
 
     /// Applies user replacements (heard → corrected), case-insensitively.
