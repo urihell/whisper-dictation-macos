@@ -24,7 +24,7 @@ struct DictationHUD: View {
                         .onAppear {
                             guard !reduceMotion else { return }
                             withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
-                                caretOpacity = 0.15
+                                caretOpacity = 0.4   // never fades to near-invisible
                             }
                         }
                 }
@@ -79,7 +79,7 @@ struct DictationHUD: View {
     private var hudText: AttributedString {
         var text = AttributedString(displayText)
         if showsCaret {
-            var caret = AttributedString("▏")
+            var caret = AttributedString("▍")   // chunky bar — reads as a cursor
             caret.foregroundColor = .brand.opacity(reduceMotion ? 1 : caretOpacity)
             text += caret
         }
