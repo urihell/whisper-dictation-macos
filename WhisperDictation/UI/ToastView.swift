@@ -10,19 +10,17 @@ struct ToastView: View {
             Image(systemName: "checkmark.circle.fill")
                 .foregroundStyle(.green)
             Text(message)
-                .font(.system(size: 14, weight: .medium))
-                .foregroundStyle(.white)
+                .font(.system(size: 14, weight: .medium, design: .rounded))
+                .foregroundStyle(.primary)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 12)
-        .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(.black.opacity(0.82))
-        )
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 14, style: .continuous)
                 .strokeBorder(.white.opacity(0.12), lineWidth: 1)
         )
+        .shadow(color: .black.opacity(0.22), radius: 14, y: 6)
         .fixedSize()
     }
 }

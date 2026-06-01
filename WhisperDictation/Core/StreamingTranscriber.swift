@@ -25,6 +25,8 @@ final class StreamingTranscriber: ObservableObject {
 
     /// What the HUD shows: confirmed text plus the live tail.
     @Published private(set) var liveText: String = ""
+    /// Smoothed microphone level (0...1) driving the live HUD meter.
+    @Published private(set) var audioLevel: Float = 0
     /// True only while blocking on the very first model load (nothing usable yet).
     @Published private(set) var isModelLoading = false
     /// The currently active (usable) model, or nil before the first load.
@@ -143,6 +145,7 @@ final class StreamingTranscriber: ObservableObject {
         confirmedText = ""
         tailText = ""
         liveText = ""
+        audioLevel = 0
 
         var options = DecodingOptions()
         options.task = .transcribe
@@ -182,8 +185,11 @@ final class StreamingTranscriber: ObservableObject {
             let confirmed = newState.confirmedSegments.filter(isSpeech).map(\.text).joined(separator: " ")
             let unconfirmed = newState.unconfirmedSegments.filter(isSpeech).map(\.text).joined(separator: " ")
             let current = newState.currentText
+            // Recent peak mic energy (already normalized 0...1) for the meter.
+            let level = newState.bufferEnergy.suffix(8).max() ?? 0
             Task { @MainActor [weak self] in
                 self?.apply(confirmed: confirmed, unconfirmed: unconfirmed, current: current)
+                self?.updateLevel(level)
             }
         }
 
@@ -205,6 +211,7 @@ final class StreamingTranscriber: ObservableObject {
         streamTask?.cancel()
         streamTask = nil
         streamer = nil
+        audioLevel = 0
         let cleaned = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
 
         // Backstop for the no-confirmed-speech race: if dictation ended while a
@@ -245,6 +252,12 @@ final class StreamingTranscriber: ObservableObject {
             )
         }
         return result
+    }
+
+    /// Smooths the raw mic level so the meter glides instead of jittering.
+    private func updateLevel(_ raw: Float) {
+        let clamped = max(0, min(1, raw))
+        audioLevel = audioLevel * 0.6 + clamped * 0.4
     }
 
     private func apply(confirmed: String, unconfirmed: String, current: String) {

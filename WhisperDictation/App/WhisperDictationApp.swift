@@ -12,6 +12,7 @@ struct WhisperDictationApp: App {
                 .environmentObject(controller)
         } label: {
             Image(systemName: status.symbolName)
+                .symbolEffect(.pulse, isActive: status.state == .recording)
         }
 
         Settings {

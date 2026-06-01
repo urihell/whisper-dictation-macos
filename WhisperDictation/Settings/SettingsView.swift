@@ -24,8 +24,9 @@ struct SettingsView: View {
             dictionary
                 .tabItem { Label("Dictionary", systemImage: "character.book.closed") }
         }
+        .formStyle(.grouped)
+        .tint(.brand)
         .frame(width: 480)
-        .padding()
         // This is a menu-bar-only (LSUIElement) app, so it isn't active by
         // default. Without activating, the Settings window can't become key and
         // the shortcut recorder never receives keystrokes.
