@@ -22,30 +22,35 @@ enum FeatherIcon {
             ctx.scaleBy(x: scale, y: scale)
             ctx.translateBy(x: -50, y: -50)
 
-            // The vane (the soft blade of the feather).
-            let vane = NSBezierPath()
-            vane.move(to: NSPoint(x: 50, y: 12))
-            vane.curve(to: NSPoint(x: 52, y: 95),
-                       controlPoint1: NSPoint(x: 16, y: 44),
-                       controlPoint2: NSPoint(x: 34, y: 84))
-            vane.curve(to: NSPoint(x: 50, y: 12),
-                       controlPoint1: NSPoint(x: 70, y: 82),
-                       controlPoint2: NSPoint(x: 86, y: 40))
-            vane.close()
-
-            // The shaft + quill — only the part below the vane shows, giving the
-            // feather its tell (vs. a plain leaf).
-            let shaft = NSBezierPath()
-            shaft.move(to: NSPoint(x: 51, y: 90))
-            shaft.line(to: NSPoint(x: 49, y: 3))
-            shaft.lineWidth = 5
-            shaft.lineCapStyle = .round
-
             let color = tint ?? .black
             color.setFill()
             color.setStroke()
-            vane.fill()
-            shaft.stroke()
+
+            // Slim vane with a knocked-out central vein (even-odd), so it reads
+            // as a feather rather than a leaf.
+            let feather = NSBezierPath()
+            feather.windingRule = .evenOdd
+            // Outer blade — slim, pointed at the top, tapering to the base.
+            feather.move(to: NSPoint(x: 50, y: 20))
+            feather.curve(to: NSPoint(x: 50, y: 90),
+                          controlPoint1: NSPoint(x: 33, y: 42),
+                          controlPoint2: NSPoint(x: 41, y: 78))
+            feather.curve(to: NSPoint(x: 50, y: 20),
+                          controlPoint1: NSPoint(x: 59, y: 78),
+                          controlPoint2: NSPoint(x: 67, y: 42))
+            feather.close()
+            // Central vein (becomes a hole under even-odd).
+            feather.appendRect(NSRect(x: 48.5, y: 28, width: 3, height: 54))
+            feather.fill()
+
+            // Quill: the tail below the vane — the feather's tell. (Kept below the
+            // blade so it doesn't fill in the vein gap above.)
+            let quill = NSBezierPath()
+            quill.move(to: NSPoint(x: 50, y: 24))
+            quill.line(to: NSPoint(x: 50, y: 6))
+            quill.lineWidth = 4
+            quill.lineCapStyle = .round
+            quill.stroke()
             ctx.restoreGState()
             return true
         }
