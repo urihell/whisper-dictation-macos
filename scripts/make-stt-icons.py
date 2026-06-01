@@ -52,10 +52,17 @@ zero = Image.new("L", (gw, gh), 0)
 glyph_black = Image.merge("RGBA", (zero, zero, zero, alpha))
 
 # ---- Menu-bar template ----
-side = max(gw, gh)
-pad = int(side * 0.06)
+# The full glyph is too detailed at 18px, so use just the microphone (the left
+# part), split at the widest internal vertical gap between mic and text lines.
+split = int(gw * 0.46)  # mic occupies roughly the left ~46% of the glyph
+mic = glyph_black.crop((0, 0, split, gh))
+mic = mic.crop(mic.getbbox())  # trim transparent margin
+mw, mh = mic.size
+
+side = max(mw, mh)
+pad = int(side * 0.08)
 mb = Image.new("RGBA", (side + 2 * pad, side + 2 * pad), (0, 0, 0, 0))
-mb.paste(glyph_black, ((mb.width - gw) // 2, (mb.height - gh) // 2), glyph_black)
+mb.paste(mic, ((mb.width - mw) // 2, (mb.height - mh) // 2), mic)
 os.makedirs(MENUSET, exist_ok=True)
 mb.resize((72, 72), Image.LANCZOS).save(f"{MENUSET}/glyph.png")
 with open(f"{MENUSET}/Contents.json", "w") as f:
