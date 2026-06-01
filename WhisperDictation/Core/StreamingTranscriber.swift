@@ -193,9 +193,8 @@ final class StreamingTranscriber: ObservableObject {
             // then hop to the main actor to publish. Drop high no-speech-
             // probability segments so Whisper's silence hallucinations (e.g.
             // "Thank you.") are never displayed or inserted.
-            let isSpeech: (TranscriptionSegment) -> Bool = { $0.noSpeechProb <= Self.noSpeechThreshold }
-            let confirmed = newState.confirmedSegments.filter(isSpeech).map(\.text).joined(separator: " ")
-            let unconfirmed = newState.unconfirmedSegments.filter(isSpeech).map(\.text).joined(separator: " ")
+            let confirmed = newState.confirmedSegments.filter(Self.isSpeechSegment).map(\.text).joined(separator: " ")
+            let unconfirmed = newState.unconfirmedSegments.filter(Self.isSpeechSegment).map(\.text).joined(separator: " ")
             let current = newState.currentText
             // Recent peak mic energy (already normalized 0...1) for the meter.
             let level = newState.bufferEnergy.suffix(8).max() ?? 0
@@ -254,6 +253,15 @@ final class StreamingTranscriber: ObservableObject {
         return silenceHallucinations.contains(normalized)
     }
 
+    /// A segment counts as speech only if it isn't flagged no-speech AND isn't a
+    /// known silence hallucination. Whisper often emits "Thank you." on silence
+    /// with a *low* noSpeechProb (a confident hallucination), so the probability
+    /// check alone misses it — reject the phrase by text too.
+    private static func isSpeechSegment(_ seg: TranscriptionSegment) -> Bool {
+        guard seg.noSpeechProb <= noSpeechThreshold else { return false }
+        return !isLikelySilenceHallucination(seg.text)
+    }
+
     /// Applies user replacements (heard → corrected), case-insensitively.
     private static func applyReplacements(_ text: String, _ map: [String: String]) -> String {
         guard !map.isEmpty else { return text }
@@ -276,7 +284,13 @@ final class StreamingTranscriber: ObservableObject {
         confirmedText = confirmed
         // Prefer the live partial decode; fall back to the last segmented tail.
         let isIdle = (current == Self.placeholder)
-        let livePartial = isIdle ? "" : current
+        var livePartial = isIdle ? "" : current
+        // The live partial has no noSpeechProb to check, so guard it by text:
+        // before any real speech is confirmed, drop a standalone known
+        // hallucination (e.g. "Thank you." flashing during silence).
+        if confirmed.isEmpty, Self.isLikelySilenceHallucination(livePartial) {
+            livePartial = ""
+        }
         tailText = livePartial.isEmpty ? unconfirmed : livePartial
 
         // `liveText` is display-only (the inserted text is recomputed in stop()
