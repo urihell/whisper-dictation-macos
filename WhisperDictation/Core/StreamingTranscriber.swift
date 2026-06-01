@@ -263,7 +263,9 @@ final class StreamingTranscriber: ObservableObject {
                 livePartial = ""
             }
             let tail = livePartial.isEmpty ? unconfirmed : livePartial
-            let candidate = Self.clean([confirmed, tail].filter { !$0.isEmpty }.joined(separator: " "))
+            // Only clean when there's something to publish — publish() discards
+            // the candidate while idle (pauses), so don't pay for it there.
+            let candidate = isIdle ? "" : Self.clean([confirmed, tail].filter { !$0.isEmpty }.joined(separator: " "))
             let level = newState.bufferEnergy.suffix(8).max() ?? 0
             let confirmedEnd = newState.lastConfirmedSegmentEndSeconds
             let decoded = newState.lastBufferSize
@@ -348,9 +350,11 @@ final class StreamingTranscriber: ObservableObject {
         "thank you for watching",
     ]
 
+    private static let hallucinationTrim = CharacterSet.whitespacesAndNewlines
+        .union(CharacterSet(charactersIn: ".,!?…"))
+
     private static func isLikelySilenceHallucination(_ text: String) -> Bool {
-        let trim = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ".,!?…"))
-        let normalized = text.lowercased().trimmingCharacters(in: trim)
+        let normalized = text.lowercased().trimmingCharacters(in: hallucinationTrim)
         return silenceHallucinations.contains(normalized)
     }
 
@@ -425,26 +429,26 @@ final class StreamingTranscriber: ObservableObject {
 
     /// Strips Whisper special tokens and non-speech annotations (e.g.
     /// `[BLANK_AUDIO]`, `(background noise)`, `*laughs*`, `♪`), then collapses
-    /// whitespace — so only the dictated words remain.
+    /// whitespace — so only the dictated words remain. Runs on every streaming
+    /// update, so the regexes are compiled once (statics below) rather than
+    /// per-call.
     private static func clean(_ text: String) -> String {
         var s = text
-        for pattern in nonSpeechPatterns {
-            s = s.replacingOccurrences(
-                of: pattern,
-                with: "",
-                options: [.regularExpression, .caseInsensitive]
-            )
+        for regex in nonSpeechRegexes {
+            s = regex.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "")
         }
-        s = s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        s = whitespaceRegex.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: " ")
         return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static let nonSpeechPatterns: [String] = [
+    private static let nonSpeechRegexes: [NSRegularExpression] = [
         "<\\|[^|]*\\|>",          // Whisper special tokens, e.g. <|startoftranscript|>
         "\\[[^\\]]*\\]",          // square-bracket tags, e.g. [BLANK_AUDIO], [SILENCE], [Music]
         // parenthesized sound descriptions, e.g. (background noise), (upbeat music)
         "\\([^()]*(?:audio|silence|music|noise|applause|laughter|laughs|laughing|sound|wind|static|inaudible|blank|background|coughing|breathing|sighs|sighing|chuckles|sniff|beep|ringing|footsteps)[^()]*\\)",
         "\\*[^*]*\\*",            // asterisk actions, e.g. *laughs*
         "[♪♫🎵🎶]",               // musical notes
-    ]
+    ].compactMap { try? NSRegularExpression(pattern: $0, options: [.caseInsensitive]) }
+
+    private static let whitespaceRegex = try! NSRegularExpression(pattern: "\\s+")
 }
