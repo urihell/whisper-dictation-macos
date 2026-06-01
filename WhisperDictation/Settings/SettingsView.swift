@@ -83,7 +83,7 @@ struct SettingsView: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Toggle("Voice formatting commands", isOn: $settings.voiceCommandsEnabled)
-                Text("Say “new line” or “new paragraph” to insert line breaks. Recognized as commands, not typed as words.")
+                Text("Say “new line”, “new paragraph”, “comma”, “period”, “question mark”, “colon”, etc. to insert formatting instead of typing the words. Like system dictation, punctuation words are always interpreted (e.g. “period” → “.”), so turn this off if you don’t want that.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
