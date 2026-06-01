@@ -217,19 +217,29 @@ final class StreamingTranscriber: ObservableObject {
     private func apply(confirmed: String, unconfirmed: String, current: String) {
         confirmedText = confirmed
         // Prefer the live partial decode; fall back to the last segmented tail.
-        let livePartial = (current == Self.placeholder) ? "" : current
+        let isIdle = (current == Self.placeholder)
+        let livePartial = isIdle ? "" : current
         tailText = livePartial.isEmpty ? unconfirmed : livePartial
 
-        // `liveText` is display-only (the inserted text is recomputed in stop()
-        // from confirmedText/tailText). WhisperKit resets currentText to "" /
-        // "Waiting for speech..." between decode windows and during VAD silence,
-        // which would momentarily empty the transcript and make the HUD flicker
-        // between your words and the "Listening…" placeholder — most visible right
-        // as you start speaking. So only publish when we actually have text; never
-        // blank the HUD mid-session. start() resets liveText, so nothing leaks
-        // across sessions.
+        // --- Display-only stabilization ---
+        // `liveText` drives the HUD; the inserted text is recomputed in stop()
+        // from confirmedText/tailText, so nothing here can change what gets typed.
+        //
+        // WhisperKit's live estimate is intentionally volatile: under VAD silence
+        // it flips currentText to "Waiting for speech..." while re-decoding the
+        // trailing audio; it resets currentText to "" at each decode-window
+        // boundary; and it shrinks it to a shorter restart on a decoder fallback.
+        // Repainting every tick makes the HUD flicker — continuously during pauses
+        // and intermittently at window/fallback boundaries while speaking.
+        //
+        // Two stateless rules keep it steady:
+        //   1. Freeze while idle — don't repaint during a pause/silence.
+        //   2. Move forward only — ignore transient tail shrink/reflow; repaint
+        //      only when the transcript actually grows.
+        // start() resets liveText, so a new session starts clean.
+        guard !isIdle else { return }
         let candidate = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
-        if !candidate.isEmpty {
+        if candidate.count > liveText.count {
             liveText = candidate
         }
     }
