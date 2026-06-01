@@ -75,8 +75,9 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            Toggle("Restore clipboard after inserting", isOn: $settings.restoreClipboard)
-                .disabled(settings.directTyping)
+            if !settings.directTyping {
+                Toggle("Restore clipboard after inserting", isOn: $settings.restoreClipboard)
+            }
 
             Toggle("Press Return after inserting (submit)", isOn: $settings.pressReturnAfterInsert)
 
