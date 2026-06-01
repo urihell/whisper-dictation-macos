@@ -213,6 +213,12 @@ final class StreamingTranscriber: ObservableObject {
     /// model isn't loaded yet, the active one is used now and the new one loads
     /// in the background (only the very first load blocks).
     func start(language: String?) async throws {
+        // Defensive: fully tear down any prior/leaked stream before starting, so
+        // overlapping loops can't run and keep the mic open.
+        if let old = streamer { streamer = nil; await old.stopStreamTranscription() }
+        streamTask?.cancel()
+        streamTask = nil
+
         try await ensureUsableModel(desired: AppSettings.shared.modelName)
         guard let whisperKit, let tokenizer = whisperKit.tokenizer else {
             throw TranscriberError.tokenizerUnavailable
@@ -338,6 +344,21 @@ final class StreamingTranscriber: ObservableObject {
 
         guard !text.isEmpty, !Self.isLikelySilenceHallucination(text) else { return "" }
         return Self.applyReplacements(text, AppSettings.shared.replacements)
+    }
+
+    /// Backstop teardown for non-stop() paths (errors, idle transitions): ensure
+    /// no stream loop keeps running and the microphone is released. Safe to call
+    /// when already idle (stopRecording is a no-op then).
+    func forceStop() {
+        streamTask?.cancel()
+        streamTask = nil
+        if let s = streamer {
+            streamer = nil
+            Task { await s.stopStreamTranscription() }
+        }
+        whisperKit?.audioProcessor.stopRecording()
+        vad = nil
+        audioLevel = 0
     }
 
     private static let sampleRate: Double = 16_000

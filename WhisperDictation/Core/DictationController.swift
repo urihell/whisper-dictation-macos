@@ -218,10 +218,14 @@ final class DictationController: ObservableObject {
     private func setState(_ newState: DictationState) {
         state = newState
         StatusController.shared.state = newState
+        // Backstop: whenever we're idle, guarantee the mic is released — no
+        // orphaned recording loop can keep it open after a session ends.
+        if newState == .idle { transcriber.forceStop() }
     }
 
     private func fail(_ error: Error) {
         stopSessionKeys()
+        transcriber.forceStop()
         lastError = error.localizedDescription
         Log.error("Dictation failed: \(error.localizedDescription)")
         OverlayController.shared.toast("⚠️ \(error.localizedDescription)")
