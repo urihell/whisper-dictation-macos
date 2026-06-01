@@ -48,24 +48,13 @@ final class StreamingTranscriber: ObservableObject {
     private var confirmedText = ""
     private var tailText = ""
 
-    // Voice gate state (absolute-energy, session-level only). A session counts
-    // as real speech once absolute mic loudness crosses the floor. This is used
-    // ONLY to suppress an entirely-silent session — it never removes words from
-    // real speech.
-    private var heardSpeech = false
+    // Loudest absolute mic RMS seen this session (diagnostic / calibration data).
     private var maxEnergy: Float = 0
 
     private static let placeholder = "Waiting for speech..."
     /// Segments whose no-speech probability exceeds this are dropped (Whisper's
     /// default). Kept conservative so a real but quiet word is never filtered.
     private static let noSpeechThreshold: Float = 0.6
-    /// A session counts as real speech once absolute mic RMS crosses this floor.
-    /// WhisperKit's VAD uses *relative* energy (normalized to recent peaks),
-    /// which clears its threshold even in a quiet room and lets the decoder
-    /// hallucinate; absolute loudness is the reliable signal. Calibrated between
-    /// this mic's silence (~0.023) and quiet speech (~0.041). It only suppresses
-    /// a wholly-silent session — it never drops words — so erring low is safe.
-    private static let speechEnergyFloor: Float = 0.030
 
     var isLoaded: Bool { whisperKit != nil }
 
@@ -159,7 +148,6 @@ final class StreamingTranscriber: ObservableObject {
         tailText = ""
         liveText = ""
         audioLevel = 0
-        heardSpeech = false
         maxEnergy = 0
 
         var options = DecodingOptions()
@@ -242,13 +230,12 @@ final class StreamingTranscriber: ObservableObject {
         streamTask = nil
         streamer = nil
         audioLevel = 0
-        Log.info("stop() — heardSpeech=\(heardSpeech), maxEnergy=\(maxEnergy), floor=\(Self.speechEnergyFloor)")
+        Log.info("stop() — maxEnergy=\(maxEnergy)")
 
         // Insert the FULL transcript so no spoken word is ever dropped. Suppress
-        // only when the whole session was silent (no real speech detected) or the
-        // result is just a known silence hallucination.
+        // only when it's empty or just a known silence hallucination.
         let cleaned = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
-        guard heardSpeech, !cleaned.isEmpty, !Self.isLikelySilenceHallucination(cleaned) else { return "" }
+        guard !cleaned.isEmpty, !Self.isLikelySilenceHallucination(cleaned) else { return "" }
         return Self.applyReplacements(cleaned, AppSettings.shared.replacements)
     }
 
@@ -295,31 +282,22 @@ final class StreamingTranscriber: ObservableObject {
     }
 
     private func apply(confirmed: String, unconfirmed: String, current: String, absEnergy: Float) {
-        // Session-level voice gate: once absolute loudness crosses the floor,
-        // this session has real speech. This NEVER drops words — it only lets us
-        // suppress a session that was silent throughout (the source of
-        // accumulating hallucinations).
-        maxEnergy = max(maxEnergy, absEnergy)
-        if maxEnergy > Self.speechEnergyFloor { heardSpeech = true }
+        maxEnergy = max(maxEnergy, absEnergy)  // diagnostic only — not gated on
 
         confirmedText = confirmed
         let isIdle = (current == Self.placeholder)
         var livePartial = isIdle ? "" : current
-        // Belt-and-suspenders: the live partial has no noSpeechProb, so before
-        // any real speech, drop a standalone known hallucination by text too.
+        // The live partial has no noSpeechProb, so before any real speech drop a
+        // standalone known hallucination by text (e.g. "Thank you." on silence).
         if confirmed.isEmpty, Self.isLikelySilenceHallucination(livePartial) {
             livePartial = ""
         }
         tailText = livePartial.isEmpty ? unconfirmed : livePartial
         let candidate = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
 
-        guard heardSpeech else {
-            // No real speech yet — keep the HUD on "Listening…" so silence
-            // hallucinations never show.
-            liveText = ""
-            return
-        }
         if isIdle {
+            // Silence/gap: publish the (filtered) authoritative text even when
+            // empty, so a known hallucination clears instead of sticking.
             liveText = candidate
         } else if !candidate.isEmpty {
             // Hold the last text through transient empties (anti-flicker).
