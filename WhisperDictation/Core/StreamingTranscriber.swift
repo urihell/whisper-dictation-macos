@@ -47,6 +47,10 @@ final class StreamingTranscriber: ObservableObject {
     private var tailText = ""
 
     private static let placeholder = "Waiting for speech..."
+    /// Segments whose no-speech probability exceeds this are dropped. Whisper
+    /// hallucinates phrases (notably "Thank you.") on silence/near-silence;
+    /// genuine speech has a low noSpeechProb, so this won't suppress real words.
+    private static let noSpeechThreshold: Float = 0.6
 
     var isLoaded: Bool { whisperKit != nil }
 
@@ -171,9 +175,12 @@ final class StreamingTranscriber: ObservableObject {
             decodingOptions: options
         ) { [weak self] _, newState in
             // Runs in the actor's context. Reduce to Sendable Strings here,
-            // then hop to the main actor to publish.
-            let confirmed = newState.confirmedSegments.map(\.text).joined(separator: " ")
-            let unconfirmed = newState.unconfirmedSegments.map(\.text).joined(separator: " ")
+            // then hop to the main actor to publish. Drop high no-speech-
+            // probability segments so Whisper's silence hallucinations (e.g.
+            // "Thank you.") are never displayed or inserted.
+            let isSpeech: (TranscriptionSegment) -> Bool = { $0.noSpeechProb <= Self.noSpeechThreshold }
+            let confirmed = newState.confirmedSegments.filter(isSpeech).map(\.text).joined(separator: " ")
+            let unconfirmed = newState.unconfirmedSegments.filter(isSpeech).map(\.text).joined(separator: " ")
             let current = newState.currentText
             Task { @MainActor [weak self] in
                 self?.apply(confirmed: confirmed, unconfirmed: unconfirmed, current: current)
@@ -217,19 +224,23 @@ final class StreamingTranscriber: ObservableObject {
     private func apply(confirmed: String, unconfirmed: String, current: String) {
         confirmedText = confirmed
         // Prefer the live partial decode; fall back to the last segmented tail.
-        let livePartial = (current == Self.placeholder) ? "" : current
+        let isIdle = (current == Self.placeholder)
+        let livePartial = isIdle ? "" : current
         tailText = livePartial.isEmpty ? unconfirmed : livePartial
 
         // `liveText` is display-only (the inserted text is recomputed in stop()
         // from confirmedText/tailText). WhisperKit resets currentText to "" /
-        // "Waiting for speech..." between decode windows and during VAD silence,
-        // which would momentarily empty the transcript and make the HUD flicker
-        // between your words and the "Listening…" placeholder — most visible right
-        // as you start speaking. So only publish when we actually have text; never
-        // blank the HUD mid-session. start() resets liveText, so nothing leaks
-        // across sessions.
+        // "Waiting for speech..." between decode windows and during VAD silence.
         let candidate = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
-        if !candidate.isEmpty {
+        if isIdle {
+            // Silence/gap: no live partial is in flight, so the (already
+            // no-speech-filtered) authoritative text is trustworthy. Publish it
+            // even when empty, so a brief silence hallucination clears from the
+            // HUD instead of sticking there.
+            liveText = candidate
+        } else if !candidate.isEmpty {
+            // Active decode: hold the last text through transient empties so the
+            // HUD doesn't flicker to "Listening…" between decode windows.
             liveText = candidate
         }
     }
