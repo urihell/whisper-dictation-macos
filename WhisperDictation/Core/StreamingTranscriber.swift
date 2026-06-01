@@ -36,7 +36,7 @@ final class StreamingTranscriber: ObservableObject {
 
     init() {
         liveTextCancellable = liveTextSubject
-            .throttle(for: .milliseconds(60), scheduler: RunLoop.main, latest: true)
+            .throttle(for: .milliseconds(40), scheduler: RunLoop.main, latest: true)
             .removeDuplicates()
             .sink { [weak self] text in self?.liveText = text }
     }
@@ -238,10 +238,12 @@ final class StreamingTranscriber: ObservableObject {
             tokenizer: tokenizer,
             audioProcessor: whisperKit.audioProcessor,
             decodingOptions: options,
-            // Raise WhisperKit's VAD silence threshold (default 0.3) so quiet
-            // background noise between words is treated as silence and skipped
-            // rather than decoded into hallucinations.
-            silenceThreshold: 0.4
+            // Confirm 1 segment back (vs the default 2) so text locks sooner — a
+            // smaller un-decoded tail to re-decode on stop (faster paste) and a
+            // quicker-settling live display. Default silenceThreshold (0.3) keeps
+            // speech onset decoding promptly; hallucinations are handled by the
+            // SoundAnalysis VAD + phrase filter, not an aggressive energy VAD.
+            requiredSegmentsForConfirmation: 1
         ) { [weak self] _, newState in
             // Runs in the streamer's actor context (off the main actor). Do the
             // heavy work here — drop no-speech / hallucination segments and build
