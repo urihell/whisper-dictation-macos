@@ -27,6 +27,19 @@ final class StreamingTranscriber: ObservableObject {
     @Published private(set) var liveText: String = ""
     /// Smoothed microphone level (0...1) driving the live HUD meter.
     @Published private(set) var audioLevel: Float = 0
+
+    // Coalesces rapid live-transcript updates so the HUD refreshes at a calm,
+    // readable rate (still showing corrections) instead of rewriting itself on
+    // every re-decode wobble.
+    private let liveTextSubject = PassthroughSubject<String, Never>()
+    private var liveTextCancellable: AnyCancellable?
+
+    init() {
+        liveTextCancellable = liveTextSubject
+            .throttle(for: .milliseconds(130), scheduler: RunLoop.main, latest: true)
+            .removeDuplicates()
+            .sink { [weak self] text in self?.liveText = text }
+    }
     /// True only while blocking on the very first model load (nothing usable yet).
     @Published private(set) var isModelLoading = false
     /// The currently active (usable) model, or nil before the first load.
@@ -317,12 +330,13 @@ final class StreamingTranscriber: ObservableObject {
 
         if vadSuppresses {
             // Confirmed silent session — keep "Listening…".
-            liveText = ""
-        } else if !isIdle, candidate.count > liveText.count {
-            // Active speech: repaint only as the transcript GROWS, so the HUD
-            // doesn't visibly rewrite itself on every re-decode wobble. During
-            // pauses/gaps (isIdle) we freeze instead of repainting.
-            liveText = candidate
+            liveTextSubject.send("")
+        } else if !isIdle {
+            // Active speech: publish the full latest transcript (so corrections
+            // are visible too), coalesced by the throttle so it can't strobe.
+            // During pauses (isIdle) we emit nothing — the HUD holds the last
+            // text rather than churning.
+            liveTextSubject.send(candidate)
         }
     }
 

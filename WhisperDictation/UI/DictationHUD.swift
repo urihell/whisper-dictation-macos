@@ -19,8 +19,6 @@ struct DictationHUD: View {
                         .foregroundStyle(.primary)
                         .multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentTransition(reduceMotion ? .identity : .opacity)
-                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.15), value: displayText)
                         .id(Self.textAnchor)
                 }
                 .frame(height: 72) // ~4 lines; longer text scrolls
