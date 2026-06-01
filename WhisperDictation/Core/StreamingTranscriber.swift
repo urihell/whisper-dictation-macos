@@ -72,6 +72,9 @@ final class StreamingTranscriber: ObservableObject {
     /// End time (seconds, absolute in the session audio) of the last locked
     /// segment — the boundary past which the tail still needs decoding on stop.
     private var lastConfirmedEnd: Float = 0
+    /// Sample count the streaming loop has already decoded (WhisperKit's
+    /// lastBufferSize). Audio beyond this is the un-decoded tail at stop.
+    private var lastDecodedSamples = 0
 
     // Speech-activity detection (SoundAnalysis) used to suppress silent sessions.
     private var vad: SpeechActivityDetector?
@@ -222,6 +225,7 @@ final class StreamingTranscriber: ObservableObject {
         tailText = ""
         lastShown = ""
         lastConfirmedEnd = 0
+        lastDecodedSamples = 0
         liveText = ""
         audioLevel = 0
         vad = SpeechActivityDetector()
@@ -262,11 +266,13 @@ final class StreamingTranscriber: ObservableObject {
             let candidate = Self.clean([confirmed, tail].filter { !$0.isEmpty }.joined(separator: " "))
             let level = newState.bufferEnergy.suffix(8).max() ?? 0
             let confirmedEnd = newState.lastConfirmedSegmentEndSeconds
+            let decoded = newState.lastBufferSize
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.confirmedText = confirmed
                 self.tailText = tail
                 self.lastConfirmedEnd = confirmedEnd
+                self.lastDecodedSamples = decoded
                 self.feedVAD()
                 self.publish(candidate: candidate, isIdle: isIdle)
                 self.updateLevel(level)
@@ -301,13 +307,17 @@ final class StreamingTranscriber: ObservableObject {
 
         guard !suppress else { return "" }
 
-        // The streaming loop hasn't decoded the final ~second of audio yet, so its
-        // tail is incomplete. Re-decode ONLY the un-confirmed tail — the audio
-        // after the last locked segment — and append it to the confirmed prefix.
-        // This recovers the dropped words without re-transcribing the whole
-        // utterance (which made stop slow). Falls back to the streamed text.
+        // Fast path: if the streaming loop already decoded essentially all the
+        // captured audio (it caught up before you stopped), the streamed text is
+        // complete — paste it instantly, no re-decode.
         var text = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
-        if let whisperKit, let tokenizer = whisperKit.tokenizer, let samples {
+        let undecoded = max(0, (samples?.count ?? 0) - lastDecodedSamples)
+        let needsTail = undecoded > Int(Self.sampleRate * 0.4)
+
+        // Slow path (only when stopped mid-flow): re-decode just the un-confirmed
+        // tail — audio after the last locked segment — and append it to the
+        // confirmed prefix, so the last words aren't dropped.
+        if needsTail, let whisperKit, let tokenizer = whisperKit.tokenizer, let samples {
             let start = max(0, min(Int(confirmedEnd * Float(Self.sampleRate)), samples.count))
             let tailAudio = Array(samples[start...])
             if tailAudio.count > Int(Self.sampleRate * 0.2) {
