@@ -1,19 +1,25 @@
 # Whisper Dictation
 
-A privacy-first, multilingual voice dictation app for macOS. Hold (or toggle) a
-hotkey, speak in any language, and the transcribed text is inserted at your
-cursor in whatever app is focused. Transcription runs **entirely on-device**
-with [WhisperKit](https://github.com/argmaxinc/WhisperKit) — no cloud, no API
-key, no per-use cost.
+A privacy-first, multilingual voice dictation app for macOS. Press (or hold) a
+hotkey, speak in any language, and the transcribed text is typed at your cursor
+in whatever app is focused. Transcription runs **entirely on-device** with
+[WhisperKit](https://github.com/argmaxinc/WhisperKit) — no cloud, no API key, no
+per-use cost.
 
 ## Features
 
 - 🎙️ **On-device Whisper** via Core ML (Apple Silicon optimized)
-- 🌍 **Multilingual** with automatic language detection
-- ⌨️ **Configurable hotkey** — push-to-talk (hold) or toggle (press/press)
-- 📋 **Inserts at the cursor** in any app (clipboard restored afterward)
+- 🌍 **Multilingual** with automatic language detection or a forced language
+- ⌨️ **Flexible trigger** — push-to-talk (hold), toggle (press/press), or
+  double-tap a single key
+- ✍️ **Types at the cursor** in any app — synthesized directly, so the text
+  **never touches the clipboard** (a clipboard-paste fallback is available)
+- 📖 **Custom vocabulary & replacements** so names, jargon, and acronyms come
+  out right
+- 🧹 **Optional on-device cleanup** (remove filler & self-corrections) via Apple
+  Intelligence — opt-in, off by default
 - 🪧 **Menu bar only** — no Dock icon, stays out of the way
-- 🔒 **Fully offline** after the first model download
+- 🔒 **Fully offline** after the first model download — nothing leaves your Mac
 
 ## Download & install
 
@@ -31,40 +37,56 @@ key, no per-use cost.
    - Power-user alternative: `xattr -cr "/Applications/WhisperDictation.app"`
      in Terminal, then open normally.
 4. Grant **Microphone** (on first dictation) and **Accessibility**
-   (System Settings → Privacy & Security → Accessibility — required to paste
-   into other apps).
+   (System Settings → Privacy & Security → Accessibility — required to type into
+   other apps). If access is missing, the menu-bar icon shows a ⚠️ and the menu
+   offers a one-click **Enable Accessibility Access…** shortcut.
 5. The first dictation downloads your chosen Whisper model (needs internet
    once); everything after that is offline.
 
-> **Why does it need Accessibility?** Whisper Dictation inserts text by
-> synthesizing a ⌘V keystroke into the focused app, which macOS gates behind
-> Accessibility. If you'd rather not trust a pre-built binary with that access,
-> the full source is in this repo — build it yourself (see below).
+> **Why does it need Accessibility?** Whisper Dictation types into the focused
+> app by synthesizing key events, which macOS gates behind Accessibility. If
+> you'd rather not trust a pre-built binary with that access, the full source is
+> in this repo — build it yourself (see below).
+
+## Privacy
+
+Everything happens on your Mac. Audio is transcribed on-device by WhisperKit and
+is never uploaded; the only network access is the one-time model download. By
+default the transcript is typed directly into the target app, so it never lands
+on the clipboard (and can't be picked up by clipboard-history tools); the
+optional paste fallback marks its clipboard item as concealed/transient so
+well-behaved clipboard managers skip it. Dictated text is never written to logs.
 
 ## First-run settings
 
 Open **Settings** from the menu bar icon:
 
-- **Shortcut** — record your dictation hotkey (push-to-talk or toggle).
-- **Model** — pick a size (`base` is a good start; `large-v3` for best
-  multilingual accuracy). Downloads on first use.
-- **General** — trigger mode, language, launch at login.
+- **Shortcut** — record your dictation hotkey, or pick a single-key / double-tap
+  trigger.
+- **Model** — pick a size (`base` is a good start; `large-v3` / `large-v3 turbo`
+  for best multilingual accuracy). Downloads on first use.
+- **General** — trigger mode, language, "type directly vs. paste," press-Return-
+  after-insert, optional cleanup, and launch at login.
+- **Dictionary** — custom vocabulary terms and heard → corrected replacements.
 
-Then focus any text field, trigger the hotkey, and speak.
+Then focus any text field, trigger dictation, and speak.
 
 ## How it works
 
 ```
-Hotkey ─▶ AudioRecorder (AVAudioEngine, 16 kHz mono)
-       ─▶ TranscriptionService (WhisperKit)
-       ─▶ TextInserter (NSPasteboard + synthesized ⌘V)
+trigger ─▶ DictationController            (state machine + gesture handling)
+        ─▶ StreamingTranscriber           (WhisperKit AudioStreamTranscriber, live)
+        ─▶ SpeechCleaner                  (optional on-device LLM cleanup)
+        ─▶ TextInserter                   (direct key synthesis, or clipboard paste)
 ```
 
 `DictationController` runs the state machine
-(`idle → recording → transcribing → inserting → idle`) and publishes status to
-the menu bar icon. The app runs **without the App Sandbox** because
-synthesizing ⌘V into other apps requires Accessibility access, which sandboxed
-apps cannot use — so it is not a Mac App Store app.
+(`idle → preparing → recording → transcribing → cleaning → inserting → idle`),
+publishing the live transcript to the floating HUD (`OverlayController` +
+`DictationHUD`) and status to the menu bar (`StatusController`). The app runs
+**without the App Sandbox** because synthesizing key events into other apps
+requires Accessibility access, which sandboxed apps cannot use — so it is not a
+Mac App Store app.
 
 ---
 
