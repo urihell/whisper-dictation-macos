@@ -82,6 +82,14 @@ struct SettingsView: View {
             Toggle("Press Return after inserting (submit)", isOn: $settings.pressReturnAfterInsert)
 
             VStack(alignment: .leading, spacing: 2) {
+                Toggle("Voice formatting commands", isOn: $settings.voiceCommandsEnabled)
+                Text("Say “new line” or “new paragraph” to insert line breaks. Recognized as commands, not typed as words.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
                 Toggle("Clean up speech (remove self-corrections & filler)", isOn: $settings.cleanupEnabled)
                     .disabled(!SpeechCleaner.isAvailable)
                 if let reason = SpeechCleaner.unavailableReason {

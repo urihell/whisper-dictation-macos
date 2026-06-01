@@ -167,6 +167,12 @@ final class DictationController: ObservableObject {
             text = await SpeechCleaner.clean(text, languageHint: AppSettings.shared.forcedLanguageCode)
         }
 
+        // Voice formatting commands ("new line" / "new paragraph") — applied last
+        // so they operate on the final text that gets typed.
+        if AppSettings.shared.voiceCommandsEnabled {
+            text = VoiceCommands.apply(text)
+        }
+
         OverlayController.shared.hide()
 
         guard !text.isEmpty else {
