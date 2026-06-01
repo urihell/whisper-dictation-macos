@@ -79,7 +79,16 @@ final class StreamingTranscriber: ObservableObject {
         // `load: true` is required: WhisperKit only auto-loads (which loads the
         // tokenizer) when a modelFolder is passed. We pass downloadBase instead,
         // so without this the tokenizer stays nil and streaming can't start.
-        let config = WhisperKitConfig(model: modelName, downloadBase: base, load: true)
+        // verbose:false / logLevel:.error keep WhisperKit from logging load and
+        // decode details (incl. decoded text) to the unified log — matching this
+        // app's privacy posture.
+        let config = WhisperKitConfig(
+            model: modelName,
+            downloadBase: base,
+            verbose: false,
+            logLevel: .error,
+            load: true
+        )
         let wk = try await WhisperKit(config)
         Log.info("Model '\(modelName)' loaded. tokenizer=\(wk.tokenizer != nil)")
         return wk
@@ -158,6 +167,10 @@ final class StreamingTranscriber: ObservableObject {
             throw TranscriberError.tokenizerUnavailable
         }
 
+        // Clear any audio left in the shared processor so a new session never
+        // sees the previous session's tail.
+        whisperKit.audioProcessor.purgeAudioSamples(keepingLast: 0)
+
         confirmedText = ""
         tailText = ""
         liveText = ""
@@ -206,19 +219,28 @@ final class StreamingTranscriber: ObservableObject {
             // rather than decoded into hallucinations.
             silenceThreshold: 0.4
         ) { [weak self] _, newState in
-            // Runs in the actor's context. Reduce to Sendable Strings here,
-            // then hop to the main actor to publish. Drop high no-speech-
-            // probability segments so Whisper's silence hallucinations (e.g.
-            // "Thank you.") are never displayed or inserted.
+            // Runs in the streamer's actor context (off the main actor). Do the
+            // heavy work here — drop no-speech / hallucination segments and build
+            // the cleaned candidate string — so the main actor only assigns state
+            // and publishes. (Whisper emits "Thank you." etc. on silence, so we
+            // filter by both noSpeechProb and known-phrase text.)
             let confirmed = newState.confirmedSegments.filter(Self.isSpeechSegment).map(\.text).joined(separator: " ")
             let unconfirmed = newState.unconfirmedSegments.filter(Self.isSpeechSegment).map(\.text).joined(separator: " ")
             let current = newState.currentText
-            // Recent peak relative energy (0...1) for the meter's liveliness.
+            let isIdle = (current == Self.placeholder)
+            var livePartial = isIdle ? "" : current
+            if confirmed.isEmpty, Self.isLikelySilenceHallucination(livePartial) {
+                livePartial = ""
+            }
+            let tail = livePartial.isEmpty ? unconfirmed : livePartial
+            let candidate = Self.clean([confirmed, tail].filter { !$0.isEmpty }.joined(separator: " "))
             let level = newState.bufferEnergy.suffix(8).max() ?? 0
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                self.confirmedText = confirmed
+                self.tailText = tail
                 self.feedVAD()
-                self.apply(confirmed: confirmed, unconfirmed: unconfirmed, current: current)
+                self.publish(candidate: candidate, isIdle: isIdle)
                 self.updateLevel(level)
             }
         }
@@ -316,18 +338,8 @@ final class StreamingTranscriber: ObservableObject {
         }
     }
 
-    private func apply(confirmed: String, unconfirmed: String, current: String) {
-        confirmedText = confirmed
-        let isIdle = (current == Self.placeholder)
-        var livePartial = isIdle ? "" : current
-        // The live partial has no noSpeechProb, so before any real speech drop a
-        // standalone known hallucination by text (e.g. "Thank you." on silence).
-        if confirmed.isEmpty, Self.isLikelySilenceHallucination(livePartial) {
-            livePartial = ""
-        }
-        tailText = livePartial.isEmpty ? unconfirmed : livePartial
-        let candidate = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
-
+    /// Publishes the (already-cleaned) candidate to the throttled HUD stream.
+    private func publish(candidate: String, isIdle: Bool) {
         if vadSuppresses {
             // Confirmed silent session — keep "Listening…".
             liveTextSubject.send("")
