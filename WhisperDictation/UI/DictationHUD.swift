@@ -30,10 +30,10 @@ struct DictationHUD: View {
                 }
                 .frame(height: 72) // ~4 lines; longer text scrolls
                 .onChange(of: displayText) {
-                    // Keep the most recent words in view as dictation grows.
-                    withAnimation(.linear(duration: 0.1)) {
-                        proxy.scrollTo(Self.textAnchor, anchor: .bottom)
-                    }
+                    // Pin to the bottom as dictation grows. Instant (no animation):
+                    // an animated scroll re-firing on every ~8/sec update stacked
+                    // into a continuous vertical shimmer once text filled the box.
+                    proxy.scrollTo(Self.textAnchor, anchor: .bottom)
                 }
             }
         }
