@@ -48,26 +48,24 @@ final class StreamingTranscriber: ObservableObject {
     private var confirmedText = ""
     private var tailText = ""
 
-    // Voice gate state (absolute-energy VAD).
-    private var lastVoiceAt: Date = .distantPast
+    // Voice gate state (absolute-energy, session-level only). A session counts
+    // as real speech once absolute mic loudness crosses the floor. This is used
+    // ONLY to suppress an entirely-silent session — it never removes words from
+    // real speech.
     private var heardSpeech = false
-    private var voicedTranscript = ""
     private var maxEnergy: Float = 0
 
     private static let placeholder = "Waiting for speech..."
-    /// Segments whose no-speech probability exceeds this are dropped. Whisper
-    /// hallucinates phrases (notably "Thank you.") on silence/near-silence;
-    /// genuine speech has a low noSpeechProb, so this won't suppress real words.
-    /// Slightly more aggressive than Whisper's 0.6 default to favor suppression.
-    private static let noSpeechThreshold: Float = 0.5
-    /// Absolute mic RMS below this counts as silence. WhisperKit's VAD uses
-    /// *relative* energy (normalized to recent peaks), which clears its
-    /// threshold even in a quiet room and lets the decoder hallucinate; absolute
-    /// loudness is the reliable, content-agnostic signal. Tunable per mic/gain.
-    private static let speechEnergyFloor: Float = 0.015
-    /// Keep accepting transcript for this long after the last voiced audio, so
-    /// the final word isn't clipped as you stop speaking.
-    private static let voiceHold: TimeInterval = 1.0
+    /// Segments whose no-speech probability exceeds this are dropped (Whisper's
+    /// default). Kept conservative so a real but quiet word is never filtered.
+    private static let noSpeechThreshold: Float = 0.6
+    /// A session counts as real speech once absolute mic RMS crosses this floor.
+    /// WhisperKit's VAD uses *relative* energy (normalized to recent peaks),
+    /// which clears its threshold even in a quiet room and lets the decoder
+    /// hallucinate; absolute loudness is the reliable signal. Calibrated between
+    /// this mic's silence (~0.023) and quiet speech (~0.041). It only suppresses
+    /// a wholly-silent session — it never drops words — so erring low is safe.
+    private static let speechEnergyFloor: Float = 0.030
 
     var isLoaded: Bool { whisperKit != nil }
 
@@ -161,9 +159,7 @@ final class StreamingTranscriber: ObservableObject {
         tailText = ""
         liveText = ""
         audioLevel = 0
-        lastVoiceAt = .distantPast
         heardSpeech = false
-        voicedTranscript = ""
         maxEnergy = 0
 
         var options = DecodingOptions()
@@ -248,12 +244,12 @@ final class StreamingTranscriber: ObservableObject {
         audioLevel = 0
         Log.info("stop() — heardSpeech=\(heardSpeech), maxEnergy=\(maxEnergy), floor=\(Self.speechEnergyFloor)")
 
-        // Insert only what was captured while real voice was present. This drops
-        // trailing silence hallucinations and yields nothing for a session with
-        // no speech at all.
-        let spoken = heardSpeech ? voicedTranscript : ""
-        guard !spoken.isEmpty, !Self.isLikelySilenceHallucination(spoken) else { return "" }
-        return Self.applyReplacements(spoken, AppSettings.shared.replacements)
+        // Insert the FULL transcript so no spoken word is ever dropped. Suppress
+        // only when the whole session was silent (no real speech detected) or the
+        // result is just a known silence hallucination.
+        let cleaned = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
+        guard heardSpeech, !cleaned.isEmpty, !Self.isLikelySilenceHallucination(cleaned) else { return "" }
+        return Self.applyReplacements(cleaned, AppSettings.shared.replacements)
     }
 
     /// Common Whisper hallucinations on silence (YouTube-caption training
@@ -299,12 +295,12 @@ final class StreamingTranscriber: ObservableObject {
     }
 
     private func apply(confirmed: String, unconfirmed: String, current: String, absEnergy: Float) {
-        // Absolute-energy voice gate, with a short trailing hold so the last
-        // word isn't clipped as you stop speaking. This is the real defense
-        // against silence hallucinations: no genuine loudness → no transcript.
+        // Session-level voice gate: once absolute loudness crosses the floor,
+        // this session has real speech. This NEVER drops words — it only lets us
+        // suppress a session that was silent throughout (the source of
+        // accumulating hallucinations).
         maxEnergy = max(maxEnergy, absEnergy)
-        if absEnergy > Self.speechEnergyFloor { lastVoiceAt = Date() }
-        let hasVoice = Date().timeIntervalSince(lastVoiceAt) < Self.voiceHold
+        if maxEnergy > Self.speechEnergyFloor { heardSpeech = true }
 
         confirmedText = confirmed
         let isIdle = (current == Self.placeholder)
@@ -317,20 +313,18 @@ final class StreamingTranscriber: ObservableObject {
         tailText = livePartial.isEmpty ? unconfirmed : livePartial
         let candidate = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
 
-        if hasVoice {
-            // Real audio present — accept the transcript and remember it. The
-            // inserted text comes from this snapshot (see stop()).
-            heardSpeech = true
-            if !candidate.isEmpty {
-                liveText = candidate
-                voicedTranscript = candidate
-            }
-        } else if !heardSpeech {
-            // Silence and nothing said yet — keep the HUD on "Listening…".
+        guard heardSpeech else {
+            // No real speech yet — keep the HUD on "Listening…" so silence
+            // hallucinations never show.
             liveText = ""
+            return
         }
-        // else: silence after speech — freeze the HUD at the last voiced text,
-        // so accumulating hallucinations never appear or get inserted.
+        if isIdle {
+            liveText = candidate
+        } else if !candidate.isEmpty {
+            // Hold the last text through transient empties (anti-flicker).
+            liveText = candidate
+        }
     }
 
     /// Strips Whisper special tokens and non-speech annotations (e.g.
