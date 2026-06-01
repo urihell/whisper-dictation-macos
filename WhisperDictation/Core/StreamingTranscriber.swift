@@ -219,7 +219,19 @@ final class StreamingTranscriber: ObservableObject {
         // Prefer the live partial decode; fall back to the last segmented tail.
         let livePartial = (current == Self.placeholder) ? "" : current
         tailText = livePartial.isEmpty ? unconfirmed : livePartial
-        liveText = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
+
+        // `liveText` is display-only (the inserted text is recomputed in stop()
+        // from confirmedText/tailText). WhisperKit resets currentText to "" /
+        // "Waiting for speech..." between decode windows and during VAD silence,
+        // which would momentarily empty the transcript and make the HUD flicker
+        // between your words and the "Listening…" placeholder — most visible right
+        // as you start speaking. So only publish when we actually have text; never
+        // blank the HUD mid-session. start() resets liveText, so nothing leaks
+        // across sessions.
+        let candidate = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
+        if !candidate.isEmpty {
+            liveText = candidate
+        }
     }
 
     /// Strips Whisper special tokens and non-speech annotations (e.g.
