@@ -5,6 +5,7 @@ struct DictationHUD: View {
     @ObservedObject var transcriber: StreamingTranscriber
     @ObservedObject var controller: DictationController
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var caretOpacity: Double = 1
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
@@ -14,19 +15,25 @@ struct DictationHUD: View {
 
             ScrollViewReader { proxy in
                 ScrollView(.vertical, showsIndicators: false) {
-                    Text(displayText)
+                    Text(hudText)
                         .font(.system(size: 15, weight: .medium, design: .rounded))
                         .foregroundStyle(.primary)
                         .multilineTextAlignment(.leading)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .id(Self.textAnchor)
+                        .onAppear {
+                            guard !reduceMotion else { return }
+                            withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
+                                caretOpacity = 0.4   // never fades to near-invisible
+                            }
+                        }
                 }
                 .frame(height: 72) // ~4 lines; longer text scrolls
                 .onChange(of: displayText) {
-                    // Keep the most recent words in view as dictation grows.
-                    withAnimation(.linear(duration: 0.1)) {
-                        proxy.scrollTo(Self.textAnchor, anchor: .bottom)
-                    }
+                    // Pin to the bottom as dictation grows. Instant (no animation):
+                    // an animated scroll re-firing on every ~8/sec update stacked
+                    // into a continuous vertical shimmer once text filled the box.
+                    proxy.scrollTo(Self.textAnchor, anchor: .bottom)
                 }
             }
         }
@@ -60,6 +67,25 @@ struct DictationHUD: View {
         default:
             LevelMeter(level: CGFloat(transcriber.audioLevel), reduceMotion: reduceMotion)
         }
+    }
+
+    /// A blinking caret follows the live transcript while recording — signals
+    /// "still listening / more coming" and that this text will be typed.
+    private var showsCaret: Bool {
+        controller.state == .recording && !transcriber.liveText.isEmpty
+    }
+
+    /// The HUD text, with a brand-tinted caret appended while recording.
+    private var hudText: AttributedString {
+        var text = AttributedString(displayText)
+        if showsCaret {
+            var caret = AttributedString("▍")   // chunky bar — reads as a cursor
+            // .primary matches the text: brightest in both themes (white on dark,
+            // black on light) and adapts automatically — unlike a fixed color.
+            caret.foregroundColor = .primary.opacity(reduceMotion ? 1 : caretOpacity)
+            text += caret
+        }
+        return text
     }
 
     private var displayText: String {

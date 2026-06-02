@@ -25,6 +25,10 @@ struct MenuContent: View {
         }
         .keyboardShortcut(",", modifiers: .command)
 
+        Button("How to Use…") {
+            WelcomeController.shared.show()
+        }
+
         Divider()
 
         Button("Quit Whisper Dictation") {

@@ -82,6 +82,14 @@ struct SettingsView: View {
             Toggle("Press Return after inserting (submit)", isOn: $settings.pressReturnAfterInsert)
 
             VStack(alignment: .leading, spacing: 2) {
+                Toggle("Voice formatting commands", isOn: $settings.voiceCommandsEnabled)
+                Text("Say “new line”, “new paragraph”, “comma”, “period”, “question mark”, “colon”, etc. to insert formatting instead of typing the words. Like system dictation, punctuation words are always interpreted (e.g. “period” → “.”), so turn this off if you don’t want that.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
                 Toggle("Clean up speech (remove self-corrections & filler)", isOn: $settings.cleanupEnabled)
                     .disabled(!SpeechCleaner.isAvailable)
                 if let reason = SpeechCleaner.unavailableReason {

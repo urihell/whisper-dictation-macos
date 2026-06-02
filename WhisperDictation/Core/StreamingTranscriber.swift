@@ -36,7 +36,7 @@ final class StreamingTranscriber: ObservableObject {
 
     init() {
         liveTextCancellable = liveTextSubject
-            .throttle(for: .milliseconds(130), scheduler: RunLoop.main, latest: true)
+            .throttle(for: .milliseconds(40), scheduler: RunLoop.main, latest: true)
             .removeDuplicates()
             .sink { [weak self] text in self?.liveText = text }
     }
@@ -50,6 +50,9 @@ final class StreamingTranscriber: ObservableObject {
     /// Called on the main actor when a background model load finishes and that
     /// model becomes active. The argument is the model name.
     var onModelReady: ((String) -> Void)?
+    /// Called on the main actor when a background model load fails (e.g. no
+    /// network on first download). The argument is the model name.
+    var onModelLoadFailed: ((String) -> Void)?
 
     private var whisperKit: WhisperKit?
     private var loadedModelName: String?
@@ -60,6 +63,18 @@ final class StreamingTranscriber: ObservableObject {
     // Latest pieces from the stream callback.
     private var confirmedText = ""
     private var tailText = ""
+    /// The last text we chose to display — used to suppress transient backward
+    /// truncations of the live tail (which read as flicker) without hiding real
+    /// corrections or growth.
+    private var lastShown = ""
+    /// Language for this session (nil = auto), reused for the final pass on stop.
+    private var sessionLanguage: String?
+    /// End time (seconds, absolute in the session audio) of the last locked
+    /// segment — the boundary past which the tail still needs decoding on stop.
+    private var lastConfirmedEnd: Float = 0
+    /// Sample count the streaming loop has already decoded (WhisperKit's
+    /// lastBufferSize). Audio beyond this is the un-decoded tail at stop.
+    private var lastDecodedSamples = 0
 
     // Speech-activity detection (SoundAnalysis) used to suppress silent sessions.
     private var vad: SpeechActivityDetector?
@@ -82,6 +97,11 @@ final class StreamingTranscriber: ObservableObject {
         // verbose:false / logLevel:.error keep WhisperKit from logging load and
         // decode details (incl. decoded text) to the unified log — matching this
         // app's privacy posture.
+        // No prewarm: it load-unload-loads to trigger Core ML specialization with
+        // lower peak memory, but the docs note it ~doubles load time. On a cold
+        // cache (download + first ANE specialization is already slow) that made
+        // first use painfully long. Fast first run matters more here than the
+        // marginal peak-memory saving.
         let config = WhisperKitConfig(
             model: modelName,
             downloadBase: base,
@@ -92,6 +112,36 @@ final class StreamingTranscriber: ObservableObject {
         let wk = try await WhisperKit(config)
         Log.info("Model '\(modelName)' loaded. tokenizer=\(wk.tokenizer != nil)")
         return wk
+    }
+
+    /// Base decoding options shared by the live stream and the final pass:
+    /// transcribe task, language, and Whisper's standard anti-hallucination
+    /// thresholds.
+    private static func baseDecodeOptions(language: String?) -> DecodingOptions {
+        var o = DecodingOptions()
+        o.task = .transcribe
+        o.language = language
+        o.detectLanguage = (language == nil)
+        o.skipSpecialTokens = true
+        o.suppressBlank = true
+        o.noSpeechThreshold = 0.6
+        o.logProbThreshold = -1.0
+        o.compressionRatioThreshold = 2.4
+        return o
+    }
+
+    /// Base options plus the user's custom-vocabulary prompt (opt-in; setting
+    /// promptTokens disables WhisperKit's prefill cache, which slows streaming).
+    private func decodeOptions(language: String?, tokenizer: any WhisperTokenizer) -> DecodingOptions {
+        var o = Self.baseDecodeOptions(language: language)
+        let terms = AppSettings.shared.vocabularyTerms.filter { !$0.isEmpty }
+        if AppSettings.shared.vocabularyBiasing, !terms.isEmpty {
+            var tokens = tokenizer.encode(text: " " + terms.joined(separator: ", "))
+            if tokens.count > 200 { tokens = Array(tokens.suffix(200)) }
+            o.promptTokens = tokens
+            o.usePrefillPrompt = true
+        }
+        return o
     }
 
     /// Loads `modelName` in the background and switches to it when ready, while
@@ -115,6 +165,7 @@ final class StreamingTranscriber: ObservableObject {
             } catch {
                 self.loadingModel = nil
                 Log.error("Background model load failed for '\(modelName)': \(error.localizedDescription)")
+                self.onModelLoadFailed?(modelName)
             }
         }
     }
@@ -162,6 +213,12 @@ final class StreamingTranscriber: ObservableObject {
     /// model isn't loaded yet, the active one is used now and the new one loads
     /// in the background (only the very first load blocks).
     func start(language: String?) async throws {
+        // Defensive: fully tear down any prior/leaked stream before starting, so
+        // overlapping loops can't run and keep the mic open.
+        if let old = streamer { streamer = nil; await old.stopStreamTranscription() }
+        streamTask?.cancel()
+        streamTask = nil
+
         try await ensureUsableModel(desired: AppSettings.shared.modelName)
         guard let whisperKit, let tokenizer = whisperKit.tokenizer else {
             throw TranscriberError.tokenizerUnavailable
@@ -173,38 +230,16 @@ final class StreamingTranscriber: ObservableObject {
 
         confirmedText = ""
         tailText = ""
+        lastShown = ""
+        lastConfirmedEnd = 0
+        lastDecodedSamples = 0
         liveText = ""
         audioLevel = 0
         vad = SpeechActivityDetector()
         fedSamples = 0
 
-        var options = DecodingOptions()
-        options.task = .transcribe
-        options.language = language
-        options.detectLanguage = (language == nil)
-        // Suppress non-speech / blank output at the source. (Not setting
-        // withoutTimestamps — the streaming segment confirmation needs them.)
-        options.skipSpecialTokens = true
-        options.suppressBlank = true
-        // Anti-hallucination guards (OpenAI Whisper's standard thresholds). On
-        // silence/near-silence the decoder otherwise emits artifacts like
-        // "Thank you." These mark such output as no-speech / low-confidence so it
-        // is dropped or retried rather than surfaced.
-        options.noSpeechThreshold = 0.6
-        options.logProbThreshold = -1.0
-        options.compressionRatioThreshold = 2.4
-
-        // Custom vocabulary: seed the decoder prompt with the user's terms so
-        // names/jargon are recognized. Opt-in — setting promptTokens disables
-        // WhisperKit's prefill cache, which slows live streaming noticeably.
-        let terms = AppSettings.shared.vocabularyTerms.filter { !$0.isEmpty }
-        if AppSettings.shared.vocabularyBiasing, !terms.isEmpty {
-            var tokens = tokenizer.encode(text: " " + terms.joined(separator: ", "))
-            if tokens.count > 200 { tokens = Array(tokens.suffix(200)) }
-            options.promptTokens = tokens
-            options.usePrefillPrompt = true
-            Log.info("Vocabulary prompt: \(terms.count) terms, \(tokens.count) tokens (prefill cache off)")
-        }
+        sessionLanguage = language
+        let options = decodeOptions(language: language, tokenizer: tokenizer)
 
         let streamer = AudioStreamTranscriber(
             audioEncoder: whisperKit.audioEncoder,
@@ -214,10 +249,12 @@ final class StreamingTranscriber: ObservableObject {
             tokenizer: tokenizer,
             audioProcessor: whisperKit.audioProcessor,
             decodingOptions: options,
-            // Raise WhisperKit's VAD silence threshold (default 0.3) so quiet
-            // background noise between words is treated as silence and skipped
-            // rather than decoded into hallucinations.
-            silenceThreshold: 0.4
+            // Confirm 1 segment back (vs the default 2) so text locks sooner — a
+            // smaller un-decoded tail to re-decode on stop (faster paste) and a
+            // quicker-settling live display. Default silenceThreshold (0.3) keeps
+            // speech onset decoding promptly; hallucinations are handled by the
+            // SoundAnalysis VAD + phrase filter, not an aggressive energy VAD.
+            requiredSegmentsForConfirmation: 1
         ) { [weak self] _, newState in
             // Runs in the streamer's actor context (off the main actor). Do the
             // heavy work here — drop no-speech / hallucination segments and build
@@ -233,12 +270,18 @@ final class StreamingTranscriber: ObservableObject {
                 livePartial = ""
             }
             let tail = livePartial.isEmpty ? unconfirmed : livePartial
-            let candidate = Self.clean([confirmed, tail].filter { !$0.isEmpty }.joined(separator: " "))
+            // Only clean when there's something to publish — publish() discards
+            // the candidate while idle (pauses), so don't pay for it there.
+            let candidate = isIdle ? "" : Self.clean([confirmed, tail].filter { !$0.isEmpty }.joined(separator: " "))
             let level = newState.bufferEnergy.suffix(8).max() ?? 0
+            let confirmedEnd = newState.lastConfirmedSegmentEndSeconds
+            let decoded = newState.lastBufferSize
             Task { @MainActor [weak self] in
                 guard let self else { return }
                 self.confirmedText = confirmed
                 self.tailText = tail
+                self.lastConfirmedEnd = confirmedEnd
+                self.lastDecodedSamples = decoded
                 self.feedVAD()
                 self.publish(candidate: candidate, isIdle: isIdle)
                 self.updateLevel(level)
@@ -259,6 +302,9 @@ final class StreamingTranscriber: ObservableObject {
 
     /// Stops streaming and returns the cleaned final transcript.
     func stop() async -> String {
+        // Capture the full audio + last-confirmed boundary before teardown.
+        let samples = whisperKit?.audioProcessor.audioSamples
+        let confirmedEnd = lastConfirmedEnd
         await streamer?.stopStreamTranscription()
         streamTask?.cancel()
         streamTask = nil
@@ -268,13 +314,54 @@ final class StreamingTranscriber: ObservableObject {
         Log.info("stop() — VAD \(vad?.stats ?? "n/a"), suppress=\(suppress)")
         vad = nil
 
-        // Insert the FULL transcript so no spoken word is ever dropped. Suppress
-        // only when the detector confirmed a silent session, or the text is empty
-        // or just a known silence hallucination.
-        let cleaned = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
-        guard !suppress, !cleaned.isEmpty, !Self.isLikelySilenceHallucination(cleaned) else { return "" }
-        return Self.applyReplacements(cleaned, AppSettings.shared.replacements)
+        guard !suppress else { return "" }
+
+        // Fast path: if the streaming loop already decoded essentially all the
+        // captured audio (it caught up before you stopped), the streamed text is
+        // complete — paste it instantly, no re-decode.
+        var text = Self.clean([confirmedText, tailText].filter { !$0.isEmpty }.joined(separator: " "))
+        let undecoded = max(0, (samples?.count ?? 0) - lastDecodedSamples)
+        let needsTail = undecoded > Int(Self.sampleRate * 0.4)
+
+        // Slow path (only when stopped mid-flow): re-decode just the un-confirmed
+        // tail — audio after the last locked segment — and append it to the
+        // confirmed prefix, so the last words aren't dropped.
+        if needsTail, let whisperKit, let tokenizer = whisperKit.tokenizer, let samples {
+            let start = max(0, min(Int(confirmedEnd * Float(Self.sampleRate)), samples.count))
+            let tailAudio = Array(samples[start...])
+            if tailAudio.count > Int(Self.sampleRate * 0.2) {
+                let opts = decodeOptions(language: sessionLanguage, tokenizer: tokenizer)
+                if let results = try? await whisperKit.transcribe(audioArray: tailAudio, decodeOptions: opts),
+                   !results.isEmpty {
+                    let tailWords = Self.clean(
+                        results.flatMap { $0.segments }.filter(Self.isSpeechSegment).map(\.text).joined(separator: " ")
+                    )
+                    let prefix = Self.clean(confirmedText)
+                    text = [prefix, tailWords].filter { !$0.isEmpty }.joined(separator: " ")
+                }
+            }
+        }
+
+        guard !text.isEmpty, !Self.isLikelySilenceHallucination(text) else { return "" }
+        return Self.applyReplacements(text, AppSettings.shared.replacements)
     }
+
+    /// Backstop teardown for non-stop() paths (errors, idle transitions): ensure
+    /// no stream loop keeps running and the microphone is released. Safe to call
+    /// when already idle (stopRecording is a no-op then).
+    func forceStop() {
+        streamTask?.cancel()
+        streamTask = nil
+        if let s = streamer {
+            streamer = nil
+            Task { await s.stopStreamTranscription() }
+        }
+        whisperKit?.audioProcessor.stopRecording()
+        vad = nil
+        audioLevel = 0
+    }
+
+    private static let sampleRate: Double = 16_000
 
     /// Common Whisper hallucinations on silence (YouTube-caption training
     /// artifacts). Used only as a backstop when nothing was confirmed.
@@ -285,9 +372,11 @@ final class StreamingTranscriber: ObservableObject {
         "thank you for watching",
     ]
 
+    private static let hallucinationTrim = CharacterSet.whitespacesAndNewlines
+        .union(CharacterSet(charactersIn: ".,!?…"))
+
     private static func isLikelySilenceHallucination(_ text: String) -> Bool {
-        let trim = CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ".,!?…"))
-        let normalized = text.lowercased().trimmingCharacters(in: trim)
+        let normalized = text.lowercased().trimmingCharacters(in: hallucinationTrim)
         return silenceHallucinations.contains(normalized)
     }
 
@@ -342,38 +431,46 @@ final class StreamingTranscriber: ObservableObject {
     private func publish(candidate: String, isIdle: Bool) {
         if vadSuppresses {
             // Confirmed silent session — keep "Listening…".
+            lastShown = ""
             liveTextSubject.send("")
-        } else if !isIdle {
-            // Active speech: publish the full latest transcript (so corrections
-            // are visible too), coalesced by the throttle so it can't strobe.
-            // During pauses (isIdle) we emit nothing — the HUD holds the last
-            // text rather than churning.
-            liveTextSubject.send(candidate)
+            return
         }
+        // During pauses (isIdle) emit nothing — the HUD holds the last text.
+        guard !isIdle else { return }
+        // Suppress a transient backward truncation of the live tail: if the new
+        // candidate is just a shorter PREFIX of what's already shown, the tail is
+        // mid-redecode and will regrow — holding the longer text avoids the
+        // backward "jump". Growth and genuine corrections (which diverge, not
+        // truncate) still publish immediately, so responsiveness is unaffected.
+        if !lastShown.isEmpty, lastShown.hasPrefix(candidate), candidate.count < lastShown.count {
+            return
+        }
+        lastShown = candidate
+        liveTextSubject.send(candidate)
     }
 
     /// Strips Whisper special tokens and non-speech annotations (e.g.
     /// `[BLANK_AUDIO]`, `(background noise)`, `*laughs*`, `♪`), then collapses
-    /// whitespace — so only the dictated words remain.
+    /// whitespace — so only the dictated words remain. Runs on every streaming
+    /// update, so the regexes are compiled once (statics below) rather than
+    /// per-call.
     private static func clean(_ text: String) -> String {
         var s = text
-        for pattern in nonSpeechPatterns {
-            s = s.replacingOccurrences(
-                of: pattern,
-                with: "",
-                options: [.regularExpression, .caseInsensitive]
-            )
+        for regex in nonSpeechRegexes {
+            s = regex.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: "")
         }
-        s = s.replacingOccurrences(of: "\\s+", with: " ", options: .regularExpression)
+        s = whitespaceRegex.stringByReplacingMatches(in: s, range: NSRange(s.startIndex..., in: s), withTemplate: " ")
         return s.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static let nonSpeechPatterns: [String] = [
+    private static let nonSpeechRegexes: [NSRegularExpression] = [
         "<\\|[^|]*\\|>",          // Whisper special tokens, e.g. <|startoftranscript|>
         "\\[[^\\]]*\\]",          // square-bracket tags, e.g. [BLANK_AUDIO], [SILENCE], [Music]
         // parenthesized sound descriptions, e.g. (background noise), (upbeat music)
         "\\([^()]*(?:audio|silence|music|noise|applause|laughter|laughs|laughing|sound|wind|static|inaudible|blank|background|coughing|breathing|sighs|sighing|chuckles|sniff|beep|ringing|footsteps)[^()]*\\)",
         "\\*[^*]*\\*",            // asterisk actions, e.g. *laughs*
         "[♪♫🎵🎶]",               // musical notes
-    ]
+    ].compactMap { try? NSRegularExpression(pattern: $0, options: [.caseInsensitive]) }
+
+    private static let whitespaceRegex = try! NSRegularExpression(pattern: "\\s+")
 }

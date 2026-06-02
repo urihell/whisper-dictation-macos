@@ -34,6 +34,11 @@ final class DictationController: ObservableObject {
             }
             self.announcedFirstModel = true
         }
+        transcriber.onModelLoadFailed = { modelName in
+            OverlayController.shared.toast(
+                "⚠️ Couldn't load \(Self.friendlyModelName(modelName)) — check your internet connection"
+            )
+        }
     }
 
     /// Loads the configured model in the background so it's ready (or compiling)
@@ -162,6 +167,12 @@ final class DictationController: ObservableObject {
             text = await SpeechCleaner.clean(text, languageHint: AppSettings.shared.forcedLanguageCode)
         }
 
+        // Voice formatting commands ("new line" / "new paragraph") — applied last
+        // so they operate on the final text that gets typed.
+        if AppSettings.shared.voiceCommandsEnabled {
+            text = VoiceCommands.apply(text)
+        }
+
         OverlayController.shared.hide()
 
         guard !text.isEmpty else {
@@ -207,12 +218,17 @@ final class DictationController: ObservableObject {
     private func setState(_ newState: DictationState) {
         state = newState
         StatusController.shared.state = newState
+        // Backstop: whenever we're idle, guarantee the mic is released — no
+        // orphaned recording loop can keep it open after a session ends.
+        if newState == .idle { transcriber.forceStop() }
     }
 
     private func fail(_ error: Error) {
         stopSessionKeys()
+        transcriber.forceStop()
         lastError = error.localizedDescription
         Log.error("Dictation failed: \(error.localizedDescription)")
+        OverlayController.shared.toast("⚠️ \(error.localizedDescription)")
         setState(.idle)
     }
 }
