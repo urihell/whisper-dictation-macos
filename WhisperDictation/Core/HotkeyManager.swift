@@ -17,6 +17,12 @@ final class HotkeyManager {
     private init() {}
 
     func start() {
+        // Ship a default shortcut (⌘.) on first launch so dictation works out of
+        // the box. Only set it when the user has none — never override a custom one.
+        if KeyboardShortcuts.getShortcut(for: .toggleDictation) == nil {
+            KeyboardShortcuts.setShortcut(.init(.period, modifiers: .command), for: .toggleDictation)
+        }
+
         KeyboardShortcuts.onKeyDown(for: .toggleDictation) {
             guard !AppSettings.shared.useSingleKey else { return }
             DictationController.shared.triggerDown()

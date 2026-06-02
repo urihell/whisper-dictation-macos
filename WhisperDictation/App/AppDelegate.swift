@@ -16,5 +16,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Start loading the configured model in the background so the first
         // dictation isn't blocked on download/compile.
         DictationController.shared.preloadModel()
+
+        // First-launch intro: a menu-bar app shows nothing on open, so explain
+        // where it lives and how to start. Skipped once the user opts out.
+        WelcomeController.shared.showIfNeeded()
     }
 }

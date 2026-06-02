@@ -92,6 +92,12 @@ final class AppSettings: ObservableObject {
     @Published var replacements: [String: String] {
         didSet { defaults.set(replacements, forKey: Keys.replacements) }
     }
+    /// Show the welcome / how-to-launch window on app launch. On by default so
+    /// first-time users (this is a menu-bar app with no Dock icon or window)
+    /// learn where it lives and how to start dictating; they can disable it.
+    @Published var showWelcomeOnLaunch: Bool {
+        didSet { defaults.set(showWelcomeOnLaunch, forKey: Keys.showWelcomeOnLaunch) }
+    }
 
     var forcedLanguageCode: String? {
         language == "auto" ? nil : language
@@ -107,13 +113,14 @@ final class AppSettings: ObservableObject {
         voiceCommandsEnabled = defaults.object(forKey: Keys.voiceCommands) as? Bool ?? true
         language = defaults.string(forKey: Keys.language) ?? "auto"
         useSingleKey = defaults.object(forKey: Keys.useSingleKey) as? Bool ?? false
-        doubleTapEnabled = defaults.object(forKey: Keys.doubleTapEnabled) as? Bool ?? true
+        doubleTapEnabled = defaults.object(forKey: Keys.doubleTapEnabled) as? Bool ?? false
         submitSendsReturn = defaults.object(forKey: Keys.submitSendsReturn) as? Bool ?? true
         singleKeyCode = defaults.object(forKey: Keys.singleKeyCode) as? Int ?? -1
         singleKeyLabel = defaults.string(forKey: Keys.singleKeyLabel) ?? ""
         vocabularyTerms = defaults.stringArray(forKey: Keys.vocabularyTerms) ?? []
         vocabularyBiasing = defaults.object(forKey: Keys.vocabularyBiasing) as? Bool ?? false
         replacements = (defaults.dictionary(forKey: Keys.replacements) as? [String: String]) ?? [:]
+        showWelcomeOnLaunch = defaults.object(forKey: Keys.showWelcomeOnLaunch) as? Bool ?? true
     }
 
     private enum Keys {
@@ -133,5 +140,6 @@ final class AppSettings: ObservableObject {
         static let vocabularyTerms = "vocabularyTerms"
         static let vocabularyBiasing = "vocabularyBiasing"
         static let replacements = "replacements"
+        static let showWelcomeOnLaunch = "showWelcomeOnLaunch"
     }
 }
