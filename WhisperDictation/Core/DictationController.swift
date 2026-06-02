@@ -131,6 +131,7 @@ final class DictationController: ObservableObject {
     func begin() {
         guard state == .idle else { return }
         Log.info("begin() — preparing")
+        SoundFeedback.start()
         setState(.preparing)
         OverlayController.shared.show()
         startSessionKeys()
@@ -152,6 +153,7 @@ final class DictationController: ObservableObject {
     /// setting; otherwise force on/off (used by submit).
     func end(pressReturn: Bool? = nil) async {
         guard state == .preparing || state == .recording else { return }
+        SoundFeedback.stop()
         stopSessionKeys()
 
         setState(.transcribing)
@@ -171,6 +173,13 @@ final class DictationController: ObservableObject {
         // so they operate on the final text that gets typed.
         if AppSettings.shared.voiceCommandsEnabled {
             text = VoiceCommands.apply(text)
+        }
+
+        // Cheap auto-capitalization (no LLM). English-only "i" fix for auto-detect
+        // or an explicit English selection.
+        if AppSettings.shared.autoCapitalize {
+            let lang = AppSettings.shared.forcedLanguageCode
+            text = TextFormatter.autoCapitalize(text, english: lang == nil || lang == "en")
         }
 
         OverlayController.shared.hide()

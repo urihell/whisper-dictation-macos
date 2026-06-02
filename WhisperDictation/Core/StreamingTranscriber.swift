@@ -46,6 +46,10 @@ final class StreamingTranscriber: ObservableObject {
     @Published private(set) var loadedModel: String?
     /// The model currently loading in the background, or nil.
     @Published private(set) var loadingModel: String?
+    /// Download progress (0...1) while a model is downloading; nil otherwise. Once
+    /// the download completes the value is cleared and the Core ML compile (which
+    /// reports no progress — it's a system service) runs as "optimizing".
+    @Published private(set) var loadProgress: Double?
 
     /// Called on the main actor when a background model load finishes and that
     /// model becomes active. The argument is the model name.
@@ -91,9 +95,31 @@ final class StreamingTranscriber: ObservableObject {
     private func makeWhisperKit(_ modelName: String) async throws -> WhisperKit {
         let base = Self.modelDownloadBase()
         Log.info("Loading model '\(modelName)' (downloads on first use) into \(base.path)…")
-        // `load: true` is required: WhisperKit only auto-loads (which loads the
-        // tokenizer) when a modelFolder is passed. We pass downloadBase instead,
-        // so without this the tokenizer stays nil and streaming can't start.
+        // Download (or resolve a cached copy) explicitly so we can surface real
+        // progress — first-run downloads are large and otherwise look frozen. An
+        // already-downloaded model resolves near-instantly (progress jumps to 1).
+        loadProgress = 0
+        do {
+            _ = try await WhisperKit.download(
+                variant: modelName,
+                downloadBase: base
+            ) { [weak self] progress in
+                let fraction = progress.fractionCompleted
+                Task { @MainActor in self?.loadProgress = fraction }
+            }
+        } catch {
+            loadProgress = nil
+            throw error
+        }
+        // Download done; the remaining time is the one-time Core ML compile, which
+        // reports no progress. Clear the bar so the UI shows "optimizing".
+        loadProgress = nil
+
+        // Load via model + downloadBase (the model is now cached from the pre-
+        // download above, so WhisperKit's own setup resolves it instantly). This
+        // keeps the proven tokenizer-loading path: `load: true` is required so the
+        // tokenizer loads (WhisperKit only auto-loads when a modelFolder is set,
+        // and we pass downloadBase instead).
         // verbose:false / logLevel:.error keep WhisperKit from logging load and
         // decode details (incl. decoded text) to the unified log — matching this
         // app's privacy posture.
@@ -196,6 +222,7 @@ final class StreamingTranscriber: ObservableObject {
         backgroundLoad?.cancel()
         backgroundLoad = nil
         loadingModel = nil
+        loadProgress = nil
     }
 
     /// Deletes a downloaded model from disk. Refuses to delete the active model,

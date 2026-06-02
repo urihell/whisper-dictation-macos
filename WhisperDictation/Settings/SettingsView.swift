@@ -90,6 +90,22 @@ struct SettingsView: View {
             }
 
             VStack(alignment: .leading, spacing: 2) {
+                Toggle("Auto-capitalize sentences", isOn: $settings.autoCapitalize)
+                Text("Capitalizes the first letter of each sentence and line, plus the standalone “i” in English. Fast and on-device — no model needed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Toggle("Play a sound when dictation starts and stops", isOn: $settings.soundCuesEnabled)
+                Text("A subtle cue so you know it’s listening (and when it stops) without looking at the screen.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
                 Toggle("Clean up speech (remove self-corrections & filler)", isOn: $settings.cleanupEnabled)
                     .disabled(!SpeechCleaner.isAvailable)
                 if let reason = SpeechCleaner.unavailableReason {
@@ -137,14 +153,21 @@ struct SettingsView: View {
             }
 
             if let loading = transcriber.loadingModel {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Loading \(DictationController.friendlyModelName(loading)) in the background — current model stays active until it's ready.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Button("Cancel") { transcriber.cancelModelLoad() }
-                        .controlSize(.small)
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 8) {
+                        if transcriber.loadProgress == nil {
+                            ProgressView().controlSize(.small)
+                        }
+                        Text(loadStatus(for: loading))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Cancel") { transcriber.cancelModelLoad() }
+                            .controlSize(.small)
+                    }
+                    if let progress = transcriber.loadProgress {
+                        ProgressView(value: progress)
+                    }
                 }
                 .fixedSize(horizontal: false, vertical: true)
             }
@@ -192,6 +215,14 @@ struct SettingsView: View {
 
     private func reloadModels() {
         models = ModelManager.downloadedModels()
+    }
+
+    private func loadStatus(for model: String) -> String {
+        let name = DictationController.friendlyModelName(model)
+        if let p = transcriber.loadProgress {
+            return "Downloading \(name)… \(Int((p * 100).rounded()))%"
+        }
+        return "Optimizing \(name) for your Mac (first run) — current model stays active until it’s ready."
     }
 
     private func delete(_ name: String) {

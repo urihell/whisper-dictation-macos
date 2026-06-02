@@ -91,7 +91,10 @@ struct DictationHUD: View {
     private var displayText: String {
         switch controller.state {
         case .preparing:
-            return transcriber.isModelLoading ? "Loading model…" : "Starting…"
+            if let p = transcriber.loadProgress {
+                return "Downloading model… \(Int((p * 100).rounded()))%"
+            }
+            return transcriber.isModelLoading ? "Optimizing model… (first run)" : "Starting…"
         case .cleaning:
             return "Cleaning up…"
         case .transcribing, .inserting:
