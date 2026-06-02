@@ -17,10 +17,11 @@ final class HotkeyManager {
     private init() {}
 
     func start() {
-        // Ship a default shortcut (⌘.) on first launch so dictation works out of
-        // the box. Only set it when the user has none — never override a custom one.
+        // Ship a default shortcut (⌥Space) on first launch so dictation works out
+        // of the box. Only set it when the user has none — never override a custom
+        // one. ⌥Space is free on stock macOS and easy to reach one-handed.
         if KeyboardShortcuts.getShortcut(for: .toggleDictation) == nil {
-            KeyboardShortcuts.setShortcut(.init(.period, modifiers: .command), for: .toggleDictation)
+            KeyboardShortcuts.setShortcut(.init(.space, modifiers: .option), for: .toggleDictation)
         }
 
         KeyboardShortcuts.onKeyDown(for: .toggleDictation) {
