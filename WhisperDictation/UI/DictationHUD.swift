@@ -46,6 +46,9 @@ struct DictationHUD: View {
                 .strokeBorder(.white.opacity(0.12), lineWidth: 1)
         )
         .shadow(color: .black.opacity(0.25), radius: 18, y: 8)
+        // Transparent margin so the card's own shadow isn't clipped by the
+        // (shadowless, clear) window edge — see OverlayController.makePanel.
+        .padding(24)
     }
 
     private static let textAnchor = "hud-text"
