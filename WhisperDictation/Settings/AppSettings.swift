@@ -59,6 +59,14 @@ final class AppSettings: ObservableObject {
     @Published var soundCuesEnabled: Bool {
         didSet { defaults.set(soundCuesEnabled, forKey: Keys.soundCues) }
     }
+    /// System sound name played when dictation starts ("None" = silent).
+    @Published var startSound: String {
+        didSet { defaults.set(startSound, forKey: Keys.startSound) }
+    }
+    /// System sound name played when dictation stops ("None" = silent).
+    @Published var stopSound: String {
+        didSet { defaults.set(stopSound, forKey: Keys.stopSound) }
+    }
     /// ISO language code, or "auto" for detection.
     @Published var language: String {
         didSet { defaults.set(language, forKey: Keys.language) }
@@ -122,6 +130,8 @@ final class AppSettings: ObservableObject {
         voiceCommandsEnabled = defaults.object(forKey: Keys.voiceCommands) as? Bool ?? true
         autoCapitalize = defaults.object(forKey: Keys.autoCapitalize) as? Bool ?? true
         soundCuesEnabled = defaults.object(forKey: Keys.soundCues) as? Bool ?? false
+        startSound = defaults.string(forKey: Keys.startSound) ?? "Pop"
+        stopSound = defaults.string(forKey: Keys.stopSound) ?? "Bottle"
         language = defaults.string(forKey: Keys.language) ?? "auto"
         useSingleKey = defaults.object(forKey: Keys.useSingleKey) as? Bool ?? false
         doubleTapEnabled = defaults.object(forKey: Keys.doubleTapEnabled) as? Bool ?? false
@@ -144,6 +154,8 @@ final class AppSettings: ObservableObject {
         static let voiceCommands = "voiceCommandsEnabled"
         static let autoCapitalize = "autoCapitalize"
         static let soundCues = "soundCuesEnabled"
+        static let startSound = "startSound"
+        static let stopSound = "stopSound"
         static let language = "language"
         static let useSingleKey = "useSingleKey"
         static let doubleTapEnabled = "doubleTapEnabled"

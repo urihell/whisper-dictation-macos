@@ -103,6 +103,10 @@ struct SettingsView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                if settings.soundCuesEnabled {
+                    soundPicker("Start sound", selection: $settings.startSound)
+                    soundPicker("Stop sound", selection: $settings.stopSound)
+                }
             }
 
             VStack(alignment: .leading, spacing: 2) {
@@ -333,6 +337,26 @@ struct SettingsView: View {
             }
         }
         .padding()
+    }
+
+    /// A sound dropdown with a preview button; picking a new sound auditions it.
+    private func soundPicker(_ label: String, selection: Binding<String>) -> some View {
+        HStack(spacing: 6) {
+            Picker(label, selection: selection) {
+                Text("None").tag(SoundFeedback.none)
+                Divider()
+                ForEach(SoundFeedback.available, id: \.self) { Text($0).tag($0) }
+            }
+            .onChange(of: selection.wrappedValue) { SoundFeedback.preview(selection.wrappedValue) }
+            Button {
+                SoundFeedback.preview(selection.wrappedValue)
+            } label: {
+                Image(systemName: "play.circle")
+            }
+            .buttonStyle(.borderless)
+            .disabled(selection.wrappedValue == SoundFeedback.none)
+            .help("Preview")
+        }
     }
 
     private func addTerm() {
