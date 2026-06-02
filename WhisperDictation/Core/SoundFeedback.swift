@@ -5,9 +5,11 @@ import AppKit
 @MainActor
 enum SoundFeedback {
     /// Played the instant dictation is triggered — confirms the key registered.
-    static func start() { play("Tink") }
-    /// Played when dictation stops / submits.
-    static func stop() { play("Pop") }
+    /// Pop: soft and quick, so it doesn't intrude when you start talking.
+    static func start() { play("Pop") }
+    /// Played when dictation stops / submits. Glass: a gentle, pleasant chime
+    /// that reads as "captured / done".
+    static func stop() { play("Glass") }
 
     private static func play(_ name: String) {
         guard AppSettings.shared.soundCuesEnabled else { return }
