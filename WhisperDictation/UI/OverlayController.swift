@@ -136,7 +136,11 @@ final class OverlayController {
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        // No window-server shadow: on a borderless, translucent, rounded panel it
+        // renders as a hard rectangle tracing the square window bounds (the black
+        // edge). The SwiftUI card draws its own soft rounded shadow instead, with
+        // transparent padding around it so that shadow isn't clipped.
+        panel.hasShadow = false
         panel.isMovableByWindowBackground = false
         panel.hidesOnDeactivate = false
         // Never steal focus from the app being dictated into.

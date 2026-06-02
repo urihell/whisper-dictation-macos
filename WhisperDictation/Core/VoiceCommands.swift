@@ -48,21 +48,8 @@ enum VoiceCommands {
         // spaces/tabs (but never newlines).
         s = s.replacingOccurrences(of: "[ \\t]+([,.;:!?…])", with: "$1", options: .regularExpression)
         s = s.replacingOccurrences(of: "[ \\t]{2,}", with: " ", options: .regularExpression)
-        s = capitalizeSentences(s)
+        // Capitalize after spoken "period"/"new paragraph" etc. (shared logic).
+        s = TextFormatter.capitalizeSentences(s)
         return s.trimmingCharacters(in: CharacterSet(charactersIn: " \t"))
-    }
-
-    /// Capitalize the first letter after a sentence-ending mark or a paragraph
-    /// break, so a spoken "period"/"new paragraph" starts the next word uppercase.
-    private static func capitalizeSentences(_ text: String) -> String {
-        guard let re = try? NSRegularExpression(pattern: "([.!?][ \\t]+|\\n{2,})([a-z])") else { return text }
-        let ns = text as NSString
-        var result = text
-        for match in re.matches(in: text, range: NSRange(location: 0, length: ns.length)).reversed() {
-            let letterRange = match.range(at: 2)
-            guard let r = Range(letterRange, in: result) else { continue }
-            result.replaceSubrange(r, with: ns.substring(with: letterRange).uppercased())
-        }
-        return result
     }
 }
