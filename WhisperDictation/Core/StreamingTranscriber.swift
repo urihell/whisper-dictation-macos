@@ -141,9 +141,9 @@ final class StreamingTranscriber: ObservableObject {
         // first use painfully long. Fast first run matters more here than the
         // marginal peak-memory saving.
         // Pick the compute backend for *this* model. GPU (Metal) is the per-model
-        // default: it loads in seconds and its compile caches reliably. The
-        // Neural Engine is more power-efficient but macOS re-specializes the
-        // model for it on every cold launch — a multi-minute, uncached compile.
+        // default: it loads in seconds. The Neural Engine is more power-efficient
+        // but the first load of a model on it triggers a one-time macOS
+        // optimization (multi-minute); the result is cached and reused after that.
         let compute: MLComputeUnits = AppSettings.shared.computeBackend(for: modelName) == .gpu
             ? .cpuAndGPU
             : .cpuAndNeuralEngine

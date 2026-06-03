@@ -16,11 +16,10 @@ enum TriggerMode: String, CaseIterable, Identifiable {
 }
 
 /// Which compute units WhisperKit loads the model onto.
-/// - `gpu`: Metal/GPU. Starts in seconds and its compile caches well — the
-///   recommended default, since the Neural Engine re-specializes the model on
-///   every cold launch (a multi-minute, uncached macOS compile).
-/// - `neuralEngine`: more power-efficient and can be faster for large models,
-///   at the cost of that slow first load after each launch.
+/// - `gpu`: Metal/GPU. Starts in seconds — the recommended default.
+/// - `neuralEngine`: more power-efficient and can be faster for large models.
+///   The first time a model loads on it, macOS does a one-time optimization
+///   (the "optimizing" wait); the result is cached and reused on later launches.
 enum ComputeBackend: String, CaseIterable, Identifiable {
     case gpu
     case neuralEngine
@@ -30,7 +29,7 @@ enum ComputeBackend: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .gpu: return "GPU — fast startup (recommended)"
-        case .neuralEngine: return "Neural Engine — efficient, slow first load"
+        case .neuralEngine: return "Neural Engine — efficient, one-time optimize"
         }
     }
 }

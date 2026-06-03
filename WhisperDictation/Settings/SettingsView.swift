@@ -229,7 +229,7 @@ struct SettingsView: View {
                         .help(deleteHelp(for: name))
                     }
                 }
-                Text("Compute is set per model. GPU starts in seconds and is the recommended default. The Neural Engine is more power-efficient and can be faster on large models, but macOS re-optimizes the model for it on every launch — that's the slow “optimizing” wait. Changing the active model's backend reloads it.")
+                Text("Compute is set per model. GPU starts in seconds and is the recommended default. The Neural Engine is more power-efficient and can be faster on large models; the first time a model loads on it, macOS runs a one-time optimization (the “optimizing” wait), then caches it so later launches are fast. Changing the active model's backend reloads it.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
