@@ -192,6 +192,7 @@ struct SettingsView: View {
                             Text("Active").font(.caption2).foregroundStyle(.green)
                         }
                         Spacer()
+                        computePicker(for: name)
                         Text(ModelManager.sizeString(of: name))
                             .font(.caption).foregroundStyle(.secondary)
                         Button(role: .destructive) {
@@ -206,6 +207,9 @@ struct SettingsView: View {
                         .help(deleteHelp(for: name))
                     }
                 }
+                Text("Compute is set per model. GPU starts in seconds and is the recommended default. The Neural Engine is more power-efficient and can be faster on large models, but macOS re-optimizes the model for it on every launch — that's the slow “optimizing” wait. Changing the active model's backend reloads it.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .padding()
@@ -219,6 +223,27 @@ struct SettingsView: View {
 
     private func reloadModels() {
         models = ModelManager.downloadedModels()
+    }
+
+    /// Per-model GPU/Neural-Engine selector. Stores the choice for that model and,
+    /// if it's the active one, reloads it so the new backend takes effect.
+    private func computePicker(for name: String) -> some View {
+        Picker("", selection: Binding(
+            get: { settings.computeBackend(for: name) },
+            set: { backend in
+                guard backend != settings.computeBackend(for: name) else { return }
+                settings.setComputeBackend(backend, for: name)
+                if name == transcriber.loadedModel {
+                    transcriber.reloadActiveModel()
+                }
+            }
+        )) {
+            Text("GPU").tag(ComputeBackend.gpu)
+            Text("Neural Engine").tag(ComputeBackend.neuralEngine)
+        }
+        .labelsHidden()
+        .pickerStyle(.menu)
+        .fixedSize()
     }
 
     private func loadStatus(for model: String) -> String {

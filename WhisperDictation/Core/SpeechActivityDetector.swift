@@ -9,7 +9,11 @@ import SoundAnalysis
 ///
 /// Currently instrumentation-only: it reports detection stats (via `stats`) so
 /// we can verify reliability against this mic before gating any transcript on it.
-final class SpeechActivityDetector: NSObject, SNResultsObserving {
+// @unchecked Sendable: all mutable state is guarded by `lock`, and analysis is
+// serialized on `analysisQueue` — so an instance can be built on a background
+// task (its init does a one-time, potentially slow Core ML/ANE load) and then
+// handed to the main actor without data races.
+final class SpeechActivityDetector: NSObject, SNResultsObserving, @unchecked Sendable {
     private let analyzer: SNAudioStreamAnalyzer
     private let format: AVAudioFormat
     private let analysisQueue = DispatchQueue(label: "com.udabby.WhisperDictation.vad")

@@ -15,6 +15,26 @@ enum TriggerMode: String, CaseIterable, Identifiable {
     }
 }
 
+/// Which compute units WhisperKit loads the model onto.
+/// - `gpu`: Metal/GPU. Starts in seconds and its compile caches well — the
+///   recommended default, since the Neural Engine re-specializes the model on
+///   every cold launch (a multi-minute, uncached macOS compile).
+/// - `neuralEngine`: more power-efficient and can be faster for large models,
+///   at the cost of that slow first load after each launch.
+enum ComputeBackend: String, CaseIterable, Identifiable {
+    case gpu
+    case neuralEngine
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .gpu: return "GPU — fast startup (recommended)"
+        case .neuralEngine: return "Neural Engine — efficient, slow first load"
+        }
+    }
+}
+
 /// UserDefaults-backed preferences, observable for SwiftUI bindings.
 @MainActor
 final class AppSettings: ObservableObject {
@@ -27,6 +47,23 @@ final class AppSettings: ObservableObject {
     }
     @Published var modelName: String {
         didSet { defaults.set(modelName, forKey: Keys.modelName) }
+    }
+    /// Per-model compute backend (model name → backend raw value). Each model
+    /// defaults to GPU for fast, well-cached startup; the user can opt an
+    /// individual model into the Neural Engine. Stored as raw strings so it
+    /// round-trips cleanly through UserDefaults.
+    @Published var computeBackends: [String: String] {
+        didSet { defaults.set(computeBackends, forKey: Keys.computeBackends) }
+    }
+
+    /// The compute backend chosen for `model` (GPU if the user hasn't set one).
+    func computeBackend(for model: String) -> ComputeBackend {
+        ComputeBackend(rawValue: computeBackends[model] ?? "") ?? .gpu
+    }
+
+    /// Sets the compute backend for a single model.
+    func setComputeBackend(_ backend: ComputeBackend, for model: String) {
+        computeBackends[model] = backend.rawValue
     }
     @Published var restoreClipboard: Bool {
         didSet { defaults.set(restoreClipboard, forKey: Keys.restoreClipboard) }
@@ -123,6 +160,7 @@ final class AppSettings: ObservableObject {
     private init() {
         triggerMode = TriggerMode(rawValue: defaults.string(forKey: Keys.triggerMode) ?? "") ?? .toggle
         modelName = defaults.string(forKey: Keys.modelName) ?? "openai_whisper-base"
+        computeBackends = (defaults.dictionary(forKey: Keys.computeBackends) as? [String: String]) ?? [:]
         restoreClipboard = defaults.object(forKey: Keys.restoreClipboard) as? Bool ?? true
         directTyping = defaults.object(forKey: Keys.directTyping) as? Bool ?? true
         pressReturnAfterInsert = defaults.object(forKey: Keys.pressReturn) as? Bool ?? false
@@ -147,6 +185,7 @@ final class AppSettings: ObservableObject {
     private enum Keys {
         static let triggerMode = "triggerMode"
         static let modelName = "modelName"
+        static let computeBackends = "computeBackends"
         static let restoreClipboard = "restoreClipboard"
         static let directTyping = "directTyping"
         static let pressReturn = "pressReturnAfterInsert"

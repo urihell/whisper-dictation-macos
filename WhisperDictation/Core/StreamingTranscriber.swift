@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import CoreML
 import WhisperKit
 
 /// Real-time transcription. Wraps WhisperKit's `AudioStreamTranscriber`, which
@@ -82,6 +83,10 @@ final class StreamingTranscriber: ObservableObject {
 
     // Speech-activity detection (SoundAnalysis) used to suppress silent sessions.
     private var vad: SpeechActivityDetector?
+    /// Bumped on every session start/teardown. The async VAD build adopts its
+    /// result only if this still matches — so a detector that finishes loading
+    /// after the session already stopped is discarded instead of lingering.
+    private var vadSessionToken = 0
     private var fedSamples = 0
 
     private static let placeholder = "Waiting for speech..."
@@ -128,9 +133,21 @@ final class StreamingTranscriber: ObservableObject {
         // cache (download + first ANE specialization is already slow) that made
         // first use painfully long. Fast first run matters more here than the
         // marginal peak-memory saving.
+        // Pick the compute backend for *this* model. GPU (Metal) is the per-model
+        // default: it loads in seconds and its compile caches reliably. The
+        // Neural Engine is more power-efficient but macOS re-specializes the
+        // model for it on every cold launch — a multi-minute, uncached compile.
+        let compute: MLComputeUnits = AppSettings.shared.computeBackend(for: modelName) == .gpu
+            ? .cpuAndGPU
+            : .cpuAndNeuralEngine
+        let computeOptions = ModelComputeOptions(
+            audioEncoderCompute: compute,
+            textDecoderCompute: compute
+        )
         let config = WhisperKitConfig(
             model: modelName,
             downloadBase: base,
+            computeOptions: computeOptions,
             verbose: false,
             logLevel: .error,
             load: true
@@ -194,6 +211,17 @@ final class StreamingTranscriber: ObservableObject {
                 self.onModelLoadFailed?(modelName)
             }
         }
+    }
+
+    /// Forces a fresh load of the current model even though its name is
+    /// unchanged — used when the compute backend changes, which only takes
+    /// effect on a reload. The active model stays usable until the reload lands.
+    func reloadActiveModel() {
+        let name = loadedModelName ?? loadingModel ?? AppSettings.shared.modelName
+        // Clear the guards so requestModel doesn't treat this as a no-op.
+        loadedModelName = nil
+        loadingModel = nil
+        requestModel(name)
     }
 
     /// Ensures a usable model exists for a session. If one is already active, it
@@ -262,8 +290,8 @@ final class StreamingTranscriber: ObservableObject {
         lastDecodedSamples = 0
         liveText = ""
         audioLevel = 0
-        vad = SpeechActivityDetector()
         fedSamples = 0
+        startVAD()
 
         sessionLanguage = language
         let options = decodeOptions(language: language, tokenizer: tokenizer)
@@ -339,7 +367,7 @@ final class StreamingTranscriber: ObservableObject {
         audioLevel = 0
         let suppress = vadSuppresses
         Log.info("stop() — VAD \(vad?.stats ?? "n/a"), suppress=\(suppress)")
-        vad = nil
+        clearVAD()
 
         guard !suppress else { return "" }
 
@@ -384,7 +412,7 @@ final class StreamingTranscriber: ObservableObject {
             Task { await s.stopStreamTranscription() }
         }
         whisperKit?.audioProcessor.stopRecording()
-        vad = nil
+        clearVAD()
         audioLevel = 0
     }
 
@@ -440,6 +468,36 @@ final class StreamingTranscriber: ObservableObject {
     private var vadSuppresses: Bool {
         guard let vad else { return false }
         return vad.resultCount >= 3 && !vad.everSpeech
+    }
+
+    /// Builds the speech detector OFF the dictation-start path. Its init loads
+    /// Apple's shared SoundAnalysis classifier, whose one-time Core ML/ANE compile
+    /// can block — and can queue behind a large Whisper model's own ANE compile,
+    /// freezing the start of dictation. The detector is best-effort
+    /// instrumentation: `feedVAD` tolerates it arriving late and `vadSuppresses`
+    /// fails open (never drops speech) until it's ready, so building it
+    /// asynchronously is free and removes the stall.
+    private func startVAD() {
+        vad = nil
+        vadSessionToken &+= 1
+        let token = vadSessionToken
+        Task.detached(priority: .utility) { [weak self] in
+            let detector = SpeechActivityDetector()
+            await self?.adoptVAD(detector, token: token)
+        }
+    }
+
+    /// Adopts an asynchronously-built detector, unless the session changed or
+    /// stopped while it was loading (token mismatch → discard).
+    private func adoptVAD(_ detector: SpeechActivityDetector?, token: Int) {
+        guard token == vadSessionToken else { return }
+        vad = detector
+    }
+
+    /// Tears down the detector and invalidates any in-flight async build.
+    private func clearVAD() {
+        vad = nil
+        vadSessionToken &+= 1
     }
 
     /// Feeds newly-captured mic samples to the speech detector.
