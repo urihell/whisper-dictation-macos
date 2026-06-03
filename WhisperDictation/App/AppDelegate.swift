@@ -21,4 +21,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // where it lives and how to start. Skipped once the user opts out.
         WelcomeController.shared.showIfNeeded()
     }
+
+    // Re-launching an already-running app (Spotlight, Finder, Launchpad, the
+    // Dock) fires this. For a menu-bar-only (LSUIElement) app it's the reliable
+    // escape hatch when the menu bar icon is hidden off-screen (notch, too many
+    // items, Bartender): opening the app again brings up Settings. ⌘, can't be
+    // trusted here because the app is rarely the frontmost one.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        NSApp.activate(ignoringOtherApps: true)
+        // SwiftUI's Settings scene is opened via this AppKit selector (macOS 14+).
+        NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        return true
+    }
 }
