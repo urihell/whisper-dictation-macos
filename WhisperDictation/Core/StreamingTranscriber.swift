@@ -51,6 +51,10 @@ final class StreamingTranscriber: ObservableObject {
     /// the download completes the value is cleared and the Core ML compile (which
     /// reports no progress — it's a system service) runs as "optimizing".
     @Published private(set) var loadProgress: Double?
+    /// When the Core ML / ANE compile ("optimizing") phase began, or nil when not
+    /// optimizing. Drives the indeterminate progress bar + elapsed timer in the UI;
+    /// this phase reports no real percentage, so elapsed time is all we can show.
+    @Published private(set) var optimizingSince: Date?
 
     /// Called on the main actor when a background model load finishes and that
     /// model becomes active. The argument is the model name.
@@ -117,8 +121,11 @@ final class StreamingTranscriber: ObservableObject {
             throw error
         }
         // Download done; the remaining time is the one-time Core ML compile, which
-        // reports no progress. Clear the bar so the UI shows "optimizing".
+        // reports no progress. Clear the determinate bar and mark the start of the
+        // "optimizing" phase so the UI can show an indeterminate bar + elapsed time.
         loadProgress = nil
+        optimizingSince = Date()
+        defer { optimizingSince = nil }
 
         // Load via model + downloadBase (the model is now cached from the pre-
         // download above, so WhisperKit's own setup resolves it instantly). This

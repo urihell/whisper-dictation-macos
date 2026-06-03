@@ -58,6 +58,12 @@ struct SettingsView: View {
         (Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String) ?? "—"
     }
 
+    /// "m:ss" elapsed between two dates, for the optimize timer.
+    private static func elapsed(_ from: Date, to now: Date) -> String {
+        let total = Int(max(0, now.timeIntervalSince(from)))
+        return String(format: "%d:%02d", total / 60, total % 60)
+    }
+
     private var general: some View {
         Form {
             Picker("Trigger mode", selection: $settings.triggerMode) {
@@ -159,9 +165,6 @@ struct SettingsView: View {
             if let loading = transcriber.loadingModel {
                 VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 8) {
-                        if transcriber.loadProgress == nil {
-                            ProgressView().controlSize(.small)
-                        }
                         Text(loadStatus(for: loading))
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -170,7 +173,22 @@ struct SettingsView: View {
                             .controlSize(.small)
                     }
                     if let progress = transcriber.loadProgress {
+                        // Download phase: real, determinate progress.
                         ProgressView(value: progress)
+                    } else if let since = transcriber.optimizingSince {
+                        // Optimize (Core ML/ANE compile) phase: no percentage is
+                        // available, so show an indeterminate bar plus a live
+                        // elapsed timer so it's clearly still working.
+                        ProgressView().progressViewStyle(.linear)
+                        TimelineView(.periodic(from: .now, by: 1)) { context in
+                            Text("Elapsed \(Self.elapsed(since, to: context.date))")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .monospacedDigit()
+                        }
+                    } else {
+                        // Preparing (e.g. tokenizer/setup before progress is known).
+                        ProgressView().progressViewStyle(.linear)
                     }
                 }
                 .fixedSize(horizontal: false, vertical: true)
