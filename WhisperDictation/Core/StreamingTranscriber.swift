@@ -155,6 +155,9 @@ final class StreamingTranscriber: ObservableObject {
             model: modelName,
             downloadBase: base,
             computeOptions: computeOptions,
+            // Custom processor so the mic input device is user-selectable; WhisperKit's
+            // AudioStreamTranscriber otherwise always records the system default device.
+            audioProcessor: SelectableInputAudioProcessor(),
             verbose: false,
             logLevel: .error,
             load: true
@@ -302,6 +305,12 @@ final class StreamingTranscriber: ObservableObject {
 
         sessionLanguage = language
         let options = decodeOptions(language: language, tokenizer: tokenizer)
+
+        // Apply the user's chosen input device (0 = system default) for this session.
+        if let proc = whisperKit.audioProcessor as? SelectableInputAudioProcessor {
+            let id = AppSettings.shared.audioInputDeviceID
+            proc.selectedDeviceID = (id == 0) ? nil : id
+        }
 
         let streamer = AudioStreamTranscriber(
             audioEncoder: whisperKit.audioEncoder,

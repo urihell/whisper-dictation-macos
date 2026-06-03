@@ -2,11 +2,13 @@ import SwiftUI
 import AppKit
 import KeyboardShortcuts
 import LaunchAtLogin
+import WhisperKit
 
 struct SettingsView: View {
     @StateObject private var settings = AppSettings.shared
     @ObservedObject private var transcriber = DictationController.shared.transcriber
     @State private var models: [String] = []
+    @State private var audioDevices: [AudioDevice] = []
     @State private var showDeleteError = false
     @State private var deleteError: String?
     @State private var newTerm = ""
@@ -21,6 +23,8 @@ struct SettingsView: View {
                     .tabItem { Label("General", systemImage: "gearshape") }
                 model
                     .tabItem { Label("Model", systemImage: "brain") }
+                audio
+                    .tabItem { Label("Audio", systemImage: "mic") }
                 shortcut
                     .tabItem { Label("Shortcut", systemImage: "keyboard") }
                 dictionary
@@ -241,6 +245,35 @@ struct SettingsView: View {
 
     private func reloadModels() {
         models = ModelManager.downloadedModels()
+    }
+
+    private var audio: some View {
+        Form {
+            Picker("Input device", selection: $settings.audioInputDeviceID) {
+                Text("System Default").tag(UInt32(0))
+                ForEach(audioDevices) { device in
+                    Text(device.name).tag(device.id)
+                }
+            }
+
+            Text("Choose which microphone captures your voice. “System Default” follows whatever macOS is set to. A change takes effect on your next dictation.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Button("Refresh devices") { reloadAudioDevices() }
+                .controlSize(.small)
+        }
+        .padding()
+        .onAppear(perform: reloadAudioDevices)
+    }
+
+    private func reloadAudioDevices() {
+        audioDevices = AudioProcessor.getAudioDevices()
+        // If the saved device is gone (e.g. unplugged), fall back to the default.
+        if settings.audioInputDeviceID != 0,
+           !audioDevices.contains(where: { $0.id == settings.audioInputDeviceID }) {
+            settings.audioInputDeviceID = 0
+        }
     }
 
     /// Per-model GPU/Neural-Engine selector. Stores the choice for that model and,

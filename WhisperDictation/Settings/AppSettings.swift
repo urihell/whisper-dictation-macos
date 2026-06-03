@@ -108,6 +108,11 @@ final class AppSettings: ObservableObject {
     @Published var language: String {
         didSet { defaults.set(language, forKey: Keys.language) }
     }
+    /// Core Audio input device id to capture from. 0 = follow the system default
+    /// input device. Stored as Int in UserDefaults.
+    @Published var audioInputDeviceID: UInt32 {
+        didSet { defaults.set(Int(audioInputDeviceID), forKey: Keys.audioInputDeviceID) }
+    }
 
     /// When true, the trigger is a single key (intercepted globally) rather
     /// than a KeyboardShortcuts key combination.
@@ -171,6 +176,7 @@ final class AppSettings: ObservableObject {
         startSound = defaults.string(forKey: Keys.startSound) ?? "Pop"
         stopSound = defaults.string(forKey: Keys.stopSound) ?? "Bottle"
         language = defaults.string(forKey: Keys.language) ?? "auto"
+        audioInputDeviceID = UInt32(max(0, defaults.integer(forKey: Keys.audioInputDeviceID)))
         useSingleKey = defaults.object(forKey: Keys.useSingleKey) as? Bool ?? false
         doubleTapEnabled = defaults.object(forKey: Keys.doubleTapEnabled) as? Bool ?? false
         submitSendsReturn = defaults.object(forKey: Keys.submitSendsReturn) as? Bool ?? true
@@ -196,6 +202,7 @@ final class AppSettings: ObservableObject {
         static let startSound = "startSound"
         static let stopSound = "stopSound"
         static let language = "language"
+        static let audioInputDeviceID = "audioInputDeviceID"
         static let useSingleKey = "useSingleKey"
         static let doubleTapEnabled = "doubleTapEnabled"
         static let submitSendsReturn = "submitSendsReturn"
