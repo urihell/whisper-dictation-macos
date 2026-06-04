@@ -36,8 +36,12 @@ final class StreamingTranscriber: ObservableObject {
     private var liveTextCancellable: AnyCancellable?
 
     init() {
+        // Throttle on DispatchQueue.main, not RunLoop.main: the RunLoop scheduler
+        // only fires in the default run-loop mode, so during transient UI/tracking
+        // states (and when another app takes foreground) the live text could stall.
+        // The dispatch scheduler is serviced across common modes.
         liveTextCancellable = liveTextSubject
-            .throttle(for: .milliseconds(40), scheduler: RunLoop.main, latest: true)
+            .throttle(for: .milliseconds(40), scheduler: DispatchQueue.main, latest: true)
             .removeDuplicates()
             .sink { [weak self] text in self?.liveText = text }
     }

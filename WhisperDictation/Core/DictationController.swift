@@ -26,6 +26,12 @@ final class DictationController: ObservableObject {
     // Suppresses the "switched" toast for the very first model load at launch.
     private var announcedFirstModel = false
 
+    // Held for the whole active session. A `.userInitiated` activity tells macOS
+    // not to App-Nap our background menu-bar app while dictating — App Nap
+    // throttles timers, which would freeze the live HUD whenever another app
+    // takes foreground. Released the moment we return to idle.
+    private var dictationActivity: NSObjectProtocol?
+
     private init() {
         transcriber.onModelReady = { [weak self] modelName in
             guard let self else { return }
@@ -227,9 +233,30 @@ final class DictationController: ObservableObject {
     private func setState(_ newState: DictationState) {
         state = newState
         StatusController.shared.state = newState
-        // Backstop: whenever we're idle, guarantee the mic is released — no
-        // orphaned recording loop can keep it open after a session ends.
-        if newState == .idle { transcriber.forceStop() }
+        if newState == .idle {
+            // Backstop: whenever we're idle, guarantee the mic is released — no
+            // orphaned recording loop can keep it open after a session ends.
+            transcriber.forceStop()
+            endDictationActivity()
+        } else {
+            beginDictationActivity()
+        }
+    }
+
+    /// Begins (once) the App Nap-suppressing activity for the active session.
+    private func beginDictationActivity() {
+        guard dictationActivity == nil else { return }
+        dictationActivity = ProcessInfo.processInfo.beginActivity(
+            options: .userInitiated,
+            reason: "Live dictation in progress"
+        )
+    }
+
+    /// Ends the activity assertion when the session returns to idle.
+    private func endDictationActivity() {
+        guard let activity = dictationActivity else { return }
+        ProcessInfo.processInfo.endActivity(activity)
+        dictationActivity = nil
     }
 
     private func fail(_ error: Error) {
