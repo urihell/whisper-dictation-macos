@@ -36,6 +36,10 @@ struct DictationHUD: View {
                     proxy.scrollTo(Self.textAnchor, anchor: .bottom)
                 }
             }
+
+            if transcriber.voiceIsolationActive {
+                isolationBadge
+            }
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
@@ -52,6 +56,18 @@ struct DictationHUD: View {
     }
 
     private static let textAnchor = "hud-text"
+
+    /// Passive indicator that this session is capturing with noise reduction on.
+    /// Read-only — the HUD is a non-activating panel that must never take focus or
+    /// clicks, so this only reports state; the toggle lives in the menu/Settings.
+    private var isolationBadge: some View {
+        Image(systemName: "waveform.badge.mic")
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(Color.brand)
+            .padding(.top, 2)
+            .help("Background-noise reduction on")
+            .accessibilityLabel("Background-noise reduction on")
+    }
 
     @ViewBuilder
     private var indicator: some View {

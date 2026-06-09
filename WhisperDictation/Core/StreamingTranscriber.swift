@@ -28,6 +28,10 @@ final class StreamingTranscriber: ObservableObject {
     @Published private(set) var liveText: String = ""
     /// Smoothed microphone level (0...1) driving the live HUD meter.
     @Published private(set) var audioLevel: Float = 0
+    /// Whether the active session is capturing through Voice Isolation. Drives
+    /// the passive "isolation on" badge in the HUD; set at session start, cleared
+    /// on stop.
+    @Published private(set) var voiceIsolationActive = false
 
     // Coalesces rapid live-transcript updates so the HUD refreshes at a calm,
     // readable rate (still showing corrections) instead of rewriting itself on
@@ -310,10 +314,13 @@ final class StreamingTranscriber: ObservableObject {
         sessionLanguage = language
         let options = decodeOptions(language: language, tokenizer: tokenizer)
 
-        // Apply the user's chosen input device (0 = system default) for this session.
+        // Apply the user's chosen input device (0 = system default) and Voice
+        // Isolation preference for this session.
         if let proc = whisperKit.audioProcessor as? SelectableInputAudioProcessor {
             let id = AppSettings.shared.audioInputDeviceID
             proc.selectedDeviceID = (id == 0) ? nil : id
+            proc.voiceIsolationEnabled = AppSettings.shared.voiceIsolationEnabled
+            voiceIsolationActive = AppSettings.shared.voiceIsolationEnabled
         }
 
         let streamer = AudioStreamTranscriber(
@@ -385,6 +392,7 @@ final class StreamingTranscriber: ObservableObject {
         streamTask = nil
         streamer = nil
         audioLevel = 0
+        voiceIsolationActive = false
         let suppress = vadSuppresses
         Log.info("stop() — VAD \(vad?.stats ?? "n/a"), suppress=\(suppress)")
         clearVAD()
@@ -434,6 +442,7 @@ final class StreamingTranscriber: ObservableObject {
         whisperKit?.audioProcessor.stopRecording()
         clearVAD()
         audioLevel = 0
+        voiceIsolationActive = false
     }
 
     private static let sampleRate: Double = 16_000

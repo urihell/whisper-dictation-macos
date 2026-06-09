@@ -4,6 +4,7 @@ import AppKit
 struct MenuContent: View {
     @EnvironmentObject private var controller: DictationController
     @ObservedObject private var status = StatusController.shared
+    @ObservedObject private var settings = AppSettings.shared
 
     var body: some View {
         if !status.accessibilityTrusted {
@@ -19,6 +20,9 @@ struct MenuContent: View {
         Button(controller.isActive ? "Stop Dictation" : "Start Dictation") {
             controller.toggle()
         }
+
+        Toggle("Reduce Background Noise", isOn: $settings.voiceIsolationEnabled)
+            .help("Cancel echo and strip non-voice noise before transcription. Takes effect on your next dictation.")
 
         SettingsLink {
             Text("Settings…")
