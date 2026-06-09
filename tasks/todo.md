@@ -128,7 +128,19 @@ a layout the converter handles). Verified in isolation, then **confirmed live**:
 3 sessions, `everSpeech=true, maxSpeechConf=0.92–0.94, top=speech, suppress=false`,
 transcripts 15 & 77 chars typed in. ✅ Lessons recorded in lessons.md.
 
-**Open — needs you:**
+### OUTCOME (shipped)
+
+Voice Isolation works and is committed (branch `feature/voice-isolation`, v1.7.0).
+- Captures + transcribes correctly with isolation on (confirmed live).
+- Removes non-voice noise; attenuates distant voices.
+- **Cannot** remove nearby English chatter — confirmed system "Voice Isolation"
+  mic mode is *active* during capture (logged `active=VoiceIsolation`), so this is
+  the platform ceiling, not a bug. True "only my voice" would need an on-device
+  target-speaker separation model (deferred; user chose to ship what works).
+- Removed the dead "Choose Mode…" Settings button (user's preferred mic mode was
+  already Voice Isolation and it auto-engages during capture). Honest caption set.
+
+**Historical open items (superseded by OUTCOME):**
 - [ ] A/B test: quiet room (confirm accuracy not degraded) vs. background
       chatter/music (confirm suppression win). Toggle via menu-bar dropdown.
 - [ ] Confirm HUD badge appears only when isolation is on, and the menu/Settings
