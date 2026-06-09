@@ -21,8 +21,8 @@ struct MenuContent: View {
             controller.toggle()
         }
 
-        Toggle("Voice Isolation", isOn: $settings.voiceIsolationEnabled)
-            .help("Suppress background noise and chatter. Takes effect on your next dictation.")
+        Toggle("Reduce Background Noise", isOn: $settings.voiceIsolationEnabled)
+            .help("Cancel echo and strip non-voice noise before transcription. Takes effect on your next dictation.")
 
         SettingsLink {
             Text("Settings…")

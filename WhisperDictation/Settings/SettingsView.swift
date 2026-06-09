@@ -264,8 +264,8 @@ struct SettingsView: View {
                 .controlSize(.small)
 
             VStack(alignment: .leading, spacing: 2) {
-                Toggle("Voice Isolation (suppress background noise)", isOn: $settings.voiceIsolationEnabled)
-                Text("Runs your mic through Apple’s on-device voice processing to cancel echo and strip non-voice noise — fans, hum, music, keyboard — before transcription. It also attenuates distant background voices but can’t fully remove nearby chatter (that needs knowing which voice is yours). Uses the system default microphone (the input device above may be ignored while on). Takes effect on your next dictation.")
+                Toggle("Reduce background noise", isOn: $settings.voiceIsolationEnabled)
+                Text("Runs your mic through Apple’s on-device voice processing to cancel echo and strip non-voice noise — fans, hum, music, keyboard — before transcription. It also attenuates distant background voices but can’t fully remove nearby chatter (that needs knowing which voice is yours). Suppression strength follows your macOS microphone mode (Control Center → Mic Mode → “Voice Isolation” is strongest). Uses the system default microphone (the input device above may be ignored while on). On by default; takes effect on your next dictation.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

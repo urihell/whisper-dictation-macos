@@ -112,12 +112,15 @@ final class AppSettings: ObservableObject {
     @Published var audioInputDeviceID: UInt32 {
         didSet { defaults.set(Int(audioInputDeviceID), forKey: Keys.audioInputDeviceID) }
     }
-    /// Run mic input through Apple's Voice Processing I/O (the engine behind
-    /// macOS "Voice Isolation"): on-device echo cancellation + background-noise
-    /// suppression + non-voice ducking, so room chatter is largely removed before
-    /// Whisper hears it. Off by default — it applies auto-gain and colors the
-    /// signal, a clear win in noisy rooms but a mild loss in quiet ones. Takes
-    /// effect on the next dictation.
+    /// Run mic input through Apple's Voice Processing I/O: on-device echo
+    /// cancellation + non-voice noise suppression before Whisper hears the audio.
+    /// This is ALSO the switch that engages the system microphone mode (Standard /
+    /// Voice Isolation, per Control Center) — without opting into voice processing
+    /// here, macOS leaves the mic in Standard regardless of the user's preference.
+    /// On by default. The toggle stays as a safety valve: it applies auto-gain and
+    /// colors the signal (a clear win in noisy rooms, a possible mild loss in quiet
+    /// ones), and gives an escape hatch if the OS audio layout ever misbehaves.
+    /// Takes effect on the next dictation.
     @Published var voiceIsolationEnabled: Bool {
         didSet { defaults.set(voiceIsolationEnabled, forKey: Keys.voiceIsolation) }
     }
@@ -185,7 +188,7 @@ final class AppSettings: ObservableObject {
         stopSound = defaults.string(forKey: Keys.stopSound) ?? "Bottle"
         language = defaults.string(forKey: Keys.language) ?? "auto"
         audioInputDeviceID = UInt32(max(0, defaults.integer(forKey: Keys.audioInputDeviceID)))
-        voiceIsolationEnabled = defaults.object(forKey: Keys.voiceIsolation) as? Bool ?? false
+        voiceIsolationEnabled = defaults.object(forKey: Keys.voiceIsolation) as? Bool ?? true
         useSingleKey = defaults.object(forKey: Keys.useSingleKey) as? Bool ?? false
         doubleTapEnabled = defaults.object(forKey: Keys.doubleTapEnabled) as? Bool ?? false
         submitSendsReturn = defaults.object(forKey: Keys.submitSendsReturn) as? Bool ?? true

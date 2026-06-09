@@ -57,7 +57,7 @@ struct DictationHUD: View {
 
     private static let textAnchor = "hud-text"
 
-    /// Passive indicator that this session is capturing through Voice Isolation.
+    /// Passive indicator that this session is capturing with noise reduction on.
     /// Read-only — the HUD is a non-activating panel that must never take focus or
     /// clicks, so this only reports state; the toggle lives in the menu/Settings.
     private var isolationBadge: some View {
@@ -65,8 +65,8 @@ struct DictationHUD: View {
             .font(.system(size: 13, weight: .medium))
             .foregroundStyle(Color.brand)
             .padding(.top, 2)
-            .help("Voice Isolation on — background noise suppressed")
-            .accessibilityLabel("Voice Isolation on")
+            .help("Background-noise reduction on")
+            .accessibilityLabel("Background-noise reduction on")
     }
 
     @ViewBuilder
