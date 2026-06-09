@@ -112,6 +112,15 @@ final class AppSettings: ObservableObject {
     @Published var audioInputDeviceID: UInt32 {
         didSet { defaults.set(Int(audioInputDeviceID), forKey: Keys.audioInputDeviceID) }
     }
+    /// Run mic input through Apple's Voice Processing I/O (the engine behind
+    /// macOS "Voice Isolation"): on-device echo cancellation + background-noise
+    /// suppression + non-voice ducking, so room chatter is largely removed before
+    /// Whisper hears it. Off by default — it applies auto-gain and colors the
+    /// signal, a clear win in noisy rooms but a mild loss in quiet ones. Takes
+    /// effect on the next dictation.
+    @Published var voiceIsolationEnabled: Bool {
+        didSet { defaults.set(voiceIsolationEnabled, forKey: Keys.voiceIsolation) }
+    }
 
     /// When true, the trigger is a single key (intercepted globally) rather
     /// than a KeyboardShortcuts key combination.
@@ -176,6 +185,7 @@ final class AppSettings: ObservableObject {
         stopSound = defaults.string(forKey: Keys.stopSound) ?? "Bottle"
         language = defaults.string(forKey: Keys.language) ?? "auto"
         audioInputDeviceID = UInt32(max(0, defaults.integer(forKey: Keys.audioInputDeviceID)))
+        voiceIsolationEnabled = defaults.object(forKey: Keys.voiceIsolation) as? Bool ?? false
         useSingleKey = defaults.object(forKey: Keys.useSingleKey) as? Bool ?? false
         doubleTapEnabled = defaults.object(forKey: Keys.doubleTapEnabled) as? Bool ?? false
         submitSendsReturn = defaults.object(forKey: Keys.submitSendsReturn) as? Bool ?? true
@@ -202,6 +212,7 @@ final class AppSettings: ObservableObject {
         static let stopSound = "stopSound"
         static let language = "language"
         static let audioInputDeviceID = "audioInputDeviceID"
+        static let voiceIsolation = "voiceIsolation"
         static let useSingleKey = "useSingleKey"
         static let doubleTapEnabled = "doubleTapEnabled"
         static let submitSendsReturn = "submitSendsReturn"
