@@ -112,19 +112,6 @@ final class AppSettings: ObservableObject {
     @Published var audioInputDeviceID: UInt32 {
         didSet { defaults.set(Int(audioInputDeviceID), forKey: Keys.audioInputDeviceID) }
     }
-    /// Run mic input through Apple's Voice Processing I/O: on-device echo
-    /// cancellation + non-voice noise suppression before Whisper hears the audio.
-    /// This is ALSO the switch that engages the system microphone mode (Standard /
-    /// Voice Isolation, per Control Center) — without opting into voice processing
-    /// here, macOS leaves the mic in Standard regardless of the user's preference.
-    /// On by default. The toggle stays as a safety valve: it applies auto-gain and
-    /// colors the signal (a clear win in noisy rooms, a possible mild loss in quiet
-    /// ones), and gives an escape hatch if the OS audio layout ever misbehaves.
-    /// Takes effect on the next dictation.
-    @Published var voiceIsolationEnabled: Bool {
-        didSet { defaults.set(voiceIsolationEnabled, forKey: Keys.voiceIsolation) }
-    }
-
     /// When true, the trigger is a single key (intercepted globally) rather
     /// than a KeyboardShortcuts key combination.
     @Published var useSingleKey: Bool {
@@ -188,7 +175,6 @@ final class AppSettings: ObservableObject {
         stopSound = defaults.string(forKey: Keys.stopSound) ?? "Bottle"
         language = defaults.string(forKey: Keys.language) ?? "auto"
         audioInputDeviceID = UInt32(max(0, defaults.integer(forKey: Keys.audioInputDeviceID)))
-        voiceIsolationEnabled = defaults.object(forKey: Keys.voiceIsolation) as? Bool ?? true
         useSingleKey = defaults.object(forKey: Keys.useSingleKey) as? Bool ?? false
         doubleTapEnabled = defaults.object(forKey: Keys.doubleTapEnabled) as? Bool ?? false
         submitSendsReturn = defaults.object(forKey: Keys.submitSendsReturn) as? Bool ?? true
@@ -215,7 +201,6 @@ final class AppSettings: ObservableObject {
         static let stopSound = "stopSound"
         static let language = "language"
         static let audioInputDeviceID = "audioInputDeviceID"
-        static let voiceIsolation = "voiceIsolation"
         static let useSingleKey = "useSingleKey"
         static let doubleTapEnabled = "doubleTapEnabled"
         static let submitSendsReturn = "submitSendsReturn"

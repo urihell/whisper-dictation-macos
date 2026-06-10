@@ -1,6 +1,7 @@
 import Foundation
 import AVFoundation
 import AudioToolbox
+import CoreAudio
 import CoreML
 import WhisperKit
 
@@ -215,5 +216,54 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
 
     static func padOrTrimAudio(fromArray audioArray: [Float], startAt startIndex: Int, toLength frameLength: Int, saveSegment: Bool) -> MLMultiArray? {
         AudioProcessor.padOrTrimAudio(fromArray: audioArray, startAt: startIndex, toLength: frameLength, saveSegment: saveSegment)
+    }
+
+    // MARK: - Device-aware voice-processing decision
+
+    /// Whether to engage Apple's Voice Processing I/O for the given input device.
+    ///
+    /// Rationale: Voice Processing is the only way to make macOS Mic Mode (Voice
+    /// Isolation) apply to a wired/built-in mic, so we WANT it there. But Bluetooth
+    /// headsets (AirPods especially) already run their own hardware voice isolation
+    /// + AGC before the audio reaches the Mac — stacking VPIO on top means double
+    /// suppression and duelling auto-gain, which measurably degrades pickup. So we
+    /// skip VPIO for Bluetooth and let the headset's clean single-stage signal
+    /// through untouched.
+    ///
+    /// `deviceID` nil (or 0) means "system default" — we resolve the live default
+    /// input device and inspect that.
+    static func shouldEngageVoiceProcessing(forInputDevice deviceID: DeviceID?) -> Bool {
+        let resolved = (deviceID ?? 0) != 0 ? deviceID! : defaultInputDeviceID()
+        guard let resolved else { return true } // unknown → safe default (built-in behavior)
+        return !isBluetoothDevice(resolved)
+    }
+
+    /// The current system default input device, or nil if it can't be read.
+    private static func defaultInputDeviceID() -> DeviceID? {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dev = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let err = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &dev)
+        guard err == noErr, dev != 0 else { return nil }
+        return dev
+    }
+
+    /// True if the device's Core Audio transport type is Bluetooth (classic or LE).
+    private static func isBluetoothDevice(_ deviceID: DeviceID) -> Bool {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var transport = UInt32(0)
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        let err = AudioObjectGetPropertyData(AudioObjectID(deviceID), &addr, 0, nil, &size, &transport)
+        guard err == noErr else { return false }
+        return transport == kAudioDeviceTransportTypeBluetooth
+            || transport == kAudioDeviceTransportTypeBluetoothLE
     }
 }

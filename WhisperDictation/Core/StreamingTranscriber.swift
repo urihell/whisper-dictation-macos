@@ -314,13 +314,20 @@ final class StreamingTranscriber: ObservableObject {
         sessionLanguage = language
         let options = decodeOptions(language: language, tokenizer: tokenizer)
 
-        // Apply the user's chosen input device (0 = system default) and Voice
-        // Isolation preference for this session.
+        // Apply the user's chosen input device (0 = system default) and decide,
+        // per device, whether to engage Apple's Voice Processing I/O. We engage it
+        // for built-in/wired mics (the only way macOS Mic Mode Voice Isolation
+        // applies there) and skip it for Bluetooth headsets like AirPods, which
+        // self-isolate in hardware — a second VPIO pass just double-processes and
+        // hurts pickup. Fully automatic; no user toggle.
         if let proc = whisperKit.audioProcessor as? SelectableInputAudioProcessor {
             let id = AppSettings.shared.audioInputDeviceID
-            proc.selectedDeviceID = (id == 0) ? nil : id
-            proc.voiceIsolationEnabled = AppSettings.shared.voiceIsolationEnabled
-            voiceIsolationActive = AppSettings.shared.voiceIsolationEnabled
+            let device: DeviceID? = (id == 0) ? nil : id
+            proc.selectedDeviceID = device
+            let engage = SelectableInputAudioProcessor.shouldEngageVoiceProcessing(forInputDevice: device)
+            proc.voiceIsolationEnabled = engage
+            voiceIsolationActive = engage
+            Log.info("Voice processing \(engage ? "ON (built-in/wired mic)" : "OFF (Bluetooth self-isolates)") for this session.")
         }
 
         let streamer = AudioStreamTranscriber(

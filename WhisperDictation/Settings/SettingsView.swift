@@ -264,8 +264,9 @@ struct SettingsView: View {
                 .controlSize(.small)
 
             VStack(alignment: .leading, spacing: 2) {
-                Toggle("Reduce background noise", isOn: $settings.voiceIsolationEnabled)
-                Text("Runs your mic through Apple’s on-device voice processing to cancel echo and strip non-voice noise — fans, hum, music, keyboard — before transcription. It also attenuates distant background voices but can’t fully remove nearby chatter (that needs knowing which voice is yours). Suppression strength follows your macOS microphone mode (Control Center → Mic Mode → “Voice Isolation” is strongest). Uses the system default microphone (the input device above may be ignored while on). On by default; takes effect on your next dictation.")
+                Label("Noise reduction is automatic", systemImage: "wand.and.stars")
+                    .font(.callout)
+                Text("Whisper Dictation now picks the best path for your mic automatically. For the built-in or a wired mic, it runs Apple’s on-device voice processing so your macOS microphone mode (Control Center → Mic Mode → “Voice Isolation”) applies. For Bluetooth headsets like AirPods — which already isolate your voice in hardware — it stays out of the way to avoid double-processing that hurts pickup. No setting to manage.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

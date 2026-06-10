@@ -65,8 +65,8 @@ struct DictationHUD: View {
             .font(.system(size: 13, weight: .medium))
             .foregroundStyle(Color.brand)
             .padding(.top, 2)
-            .help("Background-noise reduction on")
-            .accessibilityLabel("Background-noise reduction on")
+            .help("Voice Isolation on for this mic")
+            .accessibilityLabel("Voice Isolation on for this mic")
     }
 
     @ViewBuilder
