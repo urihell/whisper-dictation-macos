@@ -270,6 +270,21 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            Picker("Microphone warm-up", selection: $settings.micWarmUp) {
+                ForEach(MicWarmUp.allCases) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            .onChange(of: settings.micWarmUp) {
+                // Apply the new window to an already-warm mic immediately (e.g.
+                // Always on → 30s should arm a release now, not wait for the next
+                // dictation; Off should release right away).
+                DictationController.shared.warmUpSettingChanged()
+            }
+            Text("Apple’s voice processing takes about a second to start before any audio is captured, so the first word can be clipped if you speak the instant you press. Keeping the mic warm after a dictation skips that delay on your next one. The tradeoff: the macOS microphone-in-use indicator stays on during the warm window. Built-in / wired mic only — Bluetooth headsets start instantly regardless.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding()
         .onAppear(perform: reloadAudioDevices)

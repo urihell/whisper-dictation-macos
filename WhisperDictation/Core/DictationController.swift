@@ -137,6 +137,13 @@ final class DictationController: ObservableObject {
     func begin() {
         guard state == .idle else { return }
         Log.info("begin() — preparing")
+        // A pending warm-window release is now moot — this session will use (and
+        // re-arm) the engine. Cancel it so it can't tear the mic down mid-session.
+        cancelWarmRelease()
+        // Tell the processor whether to keep the engine warm when this session
+        // stops, per the user's setting. (The actual warm engine, if any, is
+        // adopted instantly inside start() → startRecordingLive.)
+        transcriber.setKeepWarm(AppSettings.shared.micWarmUp != .off)
         SoundFeedback.start()
         setState(.preparing)
         OverlayController.shared.show()
@@ -234,13 +241,93 @@ final class DictationController: ObservableObject {
         state = newState
         StatusController.shared.state = newState
         if newState == .idle {
-            // Backstop: whenever we're idle, guarantee the mic is released — no
-            // orphaned recording loop can keep it open after a session ends.
+            // Stop the recording loop. forceStop() routes through the processor's
+            // stopRecording(), which — when warm-up is enabled — keeps the VPIO
+            // engine flowing (warm idle) instead of fully releasing the mic, so
+            // the next dictation starts instantly. We then arm a timer to release
+            // it after the configured window.
             transcriber.forceStop()
             endDictationActivity()
+            armWarmReleaseIfNeeded()
         } else {
             beginDictationActivity()
         }
+    }
+
+    // MARK: - Microphone warm window
+
+    /// Pending release of the warm mic after the idle window elapses.
+    private var warmReleaseTask: Task<Void, Never>?
+    /// Watches for OTHER apps grabbing the mic so we release the warm engine early
+    /// (e.g. you join a Meet/Zoom call while the mic is still warm).
+    private lazy var micUsageMonitor: MicUsageMonitor = {
+        let m = MicUsageMonitor()
+        m.onOtherProcessStartedInput = { [weak self] in
+            // Only release while idle (we're done speaking and not dictating).
+            // During a live session this never fires — the monitor isn't running.
+            guard let self, self.state == .idle else { return }
+            self.releaseWarmMic(reason: "another app started using the mic")
+        }
+        return m
+    }()
+
+    /// After a session ends, release the warm engine when the configured window
+    /// elapses — unless another dictation starts first (which cancels this). Also
+    /// starts watching for other apps grabbing the mic, to release early.
+    /// `.off` releases immediately; `.always` never releases on a timer.
+    private func armWarmReleaseIfNeeded() {
+        cancelWarmRelease()
+        guard transcriber.isMicWarm else { return } // nothing warm (e.g. Bluetooth / off)
+        guard let window = AppSettings.shared.micWarmUp.window else {
+            // .always — keep warm indefinitely, but still yield to other mic users.
+            micUsageMonitor.start()
+            return
+        }
+        guard window > 0 else {
+            releaseWarmMic(reason: "warm-up off") // .off — release now
+            return
+        }
+        // Watch for other apps for the whole warm window (between sessions only).
+        micUsageMonitor.start()
+        let ns = UInt64(window * 1_000_000_000)
+        warmReleaseTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: ns)
+            guard !Task.isCancelled else { return }
+            guard let self, self.state == .idle else { return }
+            self.releaseWarmMic(reason: "warm window elapsed")
+        }
+    }
+
+    /// Cancel a pending warm-release and stop watching for other mic users
+    /// (a new session is starting, or we're releasing now).
+    private func cancelWarmRelease() {
+        warmReleaseTask?.cancel()
+        warmReleaseTask = nil
+        micUsageMonitor.stop()
+    }
+
+    /// Release the warm mic now and tear down the watch. Central path for every
+    /// release reason (window elapsed, off, other app, device change, quit).
+    private func releaseWarmMic(reason: String) {
+        cancelWarmRelease()
+        transcriber.releaseWarmMic()
+        Log.info("Warm mic released — \(reason).")
+    }
+
+    /// Hard-release the warm mic immediately (app background/quit, device change).
+    func releaseWarmMicNow() {
+        releaseWarmMic(reason: "hard release")
+    }
+
+    /// React to a live change of the warm-up setting while a mic is held warm and
+    /// no session is active. Off → release now; a bounded window → (re)arm the
+    /// timer so the mic doesn't stay on past the newly-chosen window; always →
+    /// keep warm (cancel any pending release). Without this, switching e.g.
+    /// "Always on" → "30 seconds" would leave the mic warm until the next
+    /// dictation. No-op while a session is active (begin/end will re-evaluate).
+    func warmUpSettingChanged() {
+        guard state == .idle, transcriber.isMicWarm else { return }
+        armWarmReleaseIfNeeded()
     }
 
     /// Begins (once) the App Nap-suppressing activity for the active session.

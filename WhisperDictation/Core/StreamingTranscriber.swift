@@ -76,6 +76,12 @@ final class StreamingTranscriber: ObservableObject {
     private var streamer: AudioStreamTranscriber?
     private var streamTask: Task<Void, Never>?
     private var backgroundLoad: Task<Void, Never>?
+    /// Bumped on every session stop/teardown. `start()` captures it before its
+    /// async model load and bails if it changed during the await — so a session
+    /// that was cancelled (push-to-talk release, Escape) while the first model was
+    /// still loading doesn't resume past the await and reopen the mic with no
+    /// session. Mirrors `vadSessionToken`'s adopt-only-if-current pattern.
+    private var sessionToken = 0
 
     // Latest pieces from the stream callback.
     private var confirmedText = ""
@@ -285,6 +291,35 @@ final class StreamingTranscriber: ObservableObject {
     /// Begins streaming transcription using the active model. If the configured
     /// model isn't loaded yet, the active one is used now and the new one loads
     /// in the background (only the very first load blocks).
+    /// Resolve the input device and the device-aware voice-processing decision,
+    /// and apply both to the processor. Returns whether VPIO will be engaged.
+    /// Used by `start()` to resolve the device + VPIO decision for a session.
+    @discardableResult
+    private func configureVoiceProcessing(on proc: SelectableInputAudioProcessor) -> Bool {
+        let id = AppSettings.shared.audioInputDeviceID
+        let device: DeviceID? = (id == 0) ? nil : id
+        proc.selectedDeviceID = device
+        let engage = SelectableInputAudioProcessor.shouldEngageVoiceProcessing(forInputDevice: device)
+        proc.voiceIsolationEnabled = engage
+        return engage
+    }
+
+    /// Whether a VPIO engine is currently held warm between sessions.
+    var isMicWarm: Bool {
+        (whisperKit?.audioProcessor as? SelectableInputAudioProcessor)?.isWarmIdle ?? false
+    }
+
+    /// Fully release a warm VPIO engine and the microphone (warm-up Off, window
+    /// expiry, app background/quit, device change).
+    func releaseWarmMic() {
+        (whisperKit?.audioProcessor as? SelectableInputAudioProcessor)?.releaseWarmEngine()
+    }
+
+    /// Set whether the processor keeps the VPIO engine warm when a session stops.
+    func setKeepWarm(_ keep: Bool) {
+        (whisperKit?.audioProcessor as? SelectableInputAudioProcessor)?.keepWarmOnStop = keep
+    }
+
     func start(language: String?) async throws {
         // Defensive: fully tear down any prior/leaked stream before starting, so
         // overlapping loops can't run and keep the mic open.
@@ -292,13 +327,29 @@ final class StreamingTranscriber: ObservableObject {
         streamTask?.cancel()
         streamTask = nil
 
+        // Capture this session's token before the (possibly slow) first model load.
+        sessionToken += 1
+        let token = sessionToken
+
         try await ensureUsableModel(desired: AppSettings.shared.modelName)
+
+        // If the session was stopped/cancelled while the model was loading (e.g.
+        // push-to-talk released, or Escape), don't resume into opening the mic —
+        // that would start capture with no live session. stop()/forceStop() have
+        // already settled the engine (warm idle or released) via the .idle backstop.
+        guard token == sessionToken else {
+            Log.info("start() — session \(token) superseded during model load; aborting.")
+            return
+        }
+
         guard let whisperKit, let tokenizer = whisperKit.tokenizer else {
             throw TranscriberError.tokenizerUnavailable
         }
 
-        // Clear any audio left in the shared processor so a new session never
-        // sees the previous session's tail.
+        // Clear any audio left in the shared processor so a new session never sees
+        // the previous session's tail. (On the warm-idle path, startRecordingLive
+        // also clears the rolling idle buffer as it adopts the engine — this is the
+        // belt-and-suspenders clear for the cold/forwarded paths.)
         whisperKit.audioProcessor.purgeAudioSamples(keepingLast: 0)
 
         confirmedText = ""
@@ -321,11 +372,7 @@ final class StreamingTranscriber: ObservableObject {
         // self-isolate in hardware — a second VPIO pass just double-processes and
         // hurts pickup. Fully automatic; no user toggle.
         if let proc = whisperKit.audioProcessor as? SelectableInputAudioProcessor {
-            let id = AppSettings.shared.audioInputDeviceID
-            let device: DeviceID? = (id == 0) ? nil : id
-            proc.selectedDeviceID = device
-            let engage = SelectableInputAudioProcessor.shouldEngageVoiceProcessing(forInputDevice: device)
-            proc.voiceIsolationEnabled = engage
+            let engage = configureVoiceProcessing(on: proc)
             voiceIsolationActive = engage
             Log.info("Voice processing \(engage ? "ON (built-in/wired mic)" : "OFF (Bluetooth self-isolates)") for this session.")
         }
@@ -394,6 +441,7 @@ final class StreamingTranscriber: ObservableObject {
         // Capture the full audio + last-confirmed boundary before teardown.
         let samples = whisperKit?.audioProcessor.audioSamples
         let confirmedEnd = lastConfirmedEnd
+        sessionToken += 1   // supersede any start() still awaiting its model load
         await streamer?.stopStreamTranscription()
         streamTask?.cancel()
         streamTask = nil
@@ -440,6 +488,7 @@ final class StreamingTranscriber: ObservableObject {
     /// no stream loop keeps running and the microphone is released. Safe to call
     /// when already idle (stopRecording is a no-op then).
     func forceStop() {
+        sessionToken += 1   // supersede any start() still awaiting its model load
         streamTask?.cancel()
         streamTask = nil
         if let s = streamer {

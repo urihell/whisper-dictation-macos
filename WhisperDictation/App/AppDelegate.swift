@@ -33,4 +33,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
         return true
     }
+
+    // Hard-release a warm microphone on quit so the mic-in-use indicator never
+    // outlives the app (the warm-up feature keeps the mic engine flowing between
+    // dictations; this is the final backstop).
+    func applicationWillTerminate(_ notification: Notification) {
+        DictationController.shared.releaseWarmMicNow()
+    }
 }

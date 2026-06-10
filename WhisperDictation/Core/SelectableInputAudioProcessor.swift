@@ -41,11 +41,78 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
     private var isolationEngine: AVAudioEngine?
     /// The streamer's per-buffer callback, retained while isolation drives capture.
     private var isolationCallback: (([Float]) -> Void)?
+    /// True while the engine is kept running between sessions ("warm idle") so the
+    /// next dictation adopts an already-flowing engine and avoids VPIO's ~800ms
+    /// cold-start. While warm-idle there is no session callback; ingest keeps only
+    /// a short rolling tail and discards the rest.
+    ///
+    /// Read on the audio tap thread (`ingest`) and written on the main actor
+    /// (`enterWarmIdle`/`startRecordingLive`/`teardown`) without a
+    /// lock — consistent with this class's existing `@unchecked Sendable` access to
+    /// `inner`'s buffers. A torn read only changes whether one extra buffer is
+    /// tail-capped, which is harmless; `Bool` access is atomic in practice.
+    private(set) var isWarmIdle = false
+    /// Rolling tail cap while warm-idle (engine flowing, no session). 16 kHz × 1s.
+    private let maxIdleSamples = WhisperKit.sampleRate
+    /// Serializes mutation of `inner.audioSamples` / `inner.audioEnergy` between the
+    /// real-time tap thread (`ingest`) and the main actor (the buffer clears in the
+    /// warm-idle adopt / enter paths). Without it, reassigning the arrays to `[]`
+    /// while the tap is mid-`append` is a concurrent writer/writer race (UB on the
+    /// COW storage). Held only for the O(1) reset / O(buffer) append — never across
+    /// the engine or callback.
+    private let bufferLock = NSLock()
+
+    /// Reset the shared capture buffers under the lock — safe to call while the
+    /// warm engine's tap is still firing.
+    private func clearBuffersLocked() {
+        bufferLock.lock()
+        inner.audioSamples = []
+        inner.audioEnergy = []
+        bufferLock.unlock()
+    }
+    /// When true, `stopRecording()` keeps the VPIO engine running (warm idle)
+    /// instead of tearing it down — so the next session adopts it instantly. Set
+    /// by the controller from the "Microphone warm-up" setting. Ignored on the
+    /// non-VPIO (Bluetooth) path.
+    var keepWarmOnStop = false
 
     // MARK: - Device injection / Voice-Isolation capture
 
+    /// Open the Voice-Processing capture engine NOW — before a session exists — so
+    /// Move a just-finished session's engine back into warm idle: keep it running
+    /// and flowing, but detach the session callback and reset buffers so the next
+    /// dictation starts instantly. No-op if there's no engine (non-VPIO path).
+    func enterWarmIdle() {
+        guard isolationEngine != nil else { return }
+        isWarmIdle = true            // set before clearing so ingest applies the idle cap
+        isolationCallback = nil
+        clearBuffersLocked()
+        Log.info("Voice Isolation: engine kept warm (idle).")
+    }
+
+    /// Fully release the engine and the microphone (Off mode, warm-window expiry,
+    /// device change, app background/quit). Safe to call when nothing is running.
+    func releaseWarmEngine() {
+        guard isolationEngine != nil else { return }
+        teardownIsolationEngine()
+        Log.info("Voice Isolation: warm engine released.")
+    }
+
     func startRecordingLive(inputDeviceID: DeviceID?, callback: (([Float]) -> Void)?) throws {
         let device = inputDeviceID ?? selectedDeviceID
+        // Adopt a warm-idle engine: just attach the streamer's callback and keep
+        // the already-converged, flowing engine. Only valid if this session also
+        // wants VPIO (both warm-idle and session use the built-in/wired path).
+        if isWarmIdle, isolationEngine != nil, voiceIsolationEnabled {
+            isWarmIdle = false           // stop the idle cap before attaching the session
+            clearBuffersLocked()         // drop idle pre-roll; safe vs the still-firing tap
+            isolationCallback = callback
+            Log.info("Voice Isolation: adopted warm engine (instant start).")
+            return
+        }
+        // A warm engine exists but this session doesn't want VPIO (e.g. device
+        // flipped to Bluetooth): discard it and take the plain path.
+        if isWarmIdle { teardownIsolationEngine() }
         guard voiceIsolationEnabled else {
             try inner.startRecordingLive(inputDeviceID: device, callback: callback)
             return
@@ -76,10 +143,16 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
     /// `relativeEnergy` and the per-buffer callback — works unchanged.
     private func startIsolatedRecording(inputDeviceID: DeviceID?, callback: (([Float]) -> Void)?) throws {
         // Match AudioProcessor.startRecordingLive: clear prior session state.
-        inner.audioSamples = []
-        inner.audioEnergy = []
+        // (No tap is running yet on this cold path, but use the locked clear for
+        // consistency with the warm paths.)
+        clearBuffersLocked()
         isolationCallback = callback
+        try buildAndStartIsolationEngine(inputDeviceID: inputDeviceID)
+    }
 
+    /// Builds the Voice-Processing capture graph and starts the engine. Used by the
+    /// immediate-start path (`startIsolatedRecording`).
+    private func buildAndStartIsolationEngine(inputDeviceID: DeviceID?) throws {
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
 
@@ -161,11 +234,27 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
     /// streamer's callback — a faithful copy of `AudioProcessor.processBuffer`.
     private func ingest(_ buffer: [Float]) {
         guard !buffer.isEmpty else { return }
+        // Mutate the shared buffers under the lock — the main actor may clear them
+        // (warm-idle adopt/enter) concurrently with this tap-thread append.
+        bufferLock.lock()
         inner.audioSamples.append(contentsOf: buffer)
         let minAvgEnergy = inner.audioEnergy.suffix(20).reduce(Float.infinity) { min($0, $1.avg) }
         let relativeEnergy = AudioProcessor.calculateRelativeEnergy(of: buffer, relativeTo: minAvgEnergy)
         let signalEnergy = AudioProcessor.calculateEnergy(of: buffer)
         inner.audioEnergy.append((relativeEnergy, signalEnergy.avg, signalEnergy.max, signalEnergy.min))
+        // While warm-idle (engine flowing but no session adopted it), the buffers
+        // would grow without bound over minutes of idle. Keep only a short rolling
+        // tail. Cap BOTH: purgeAudioSamples trims audioSamples but not audioEnergy,
+        // so trim audioEnergy explicitly too.
+        if isWarmIdle, inner.audioSamples.count > maxIdleSamples {
+            inner.purgeAudioSamples(keepingLast: maxIdleSamples)
+            let energyCap = maxIdleSamples / inner.minBufferLength + 1
+            if inner.audioEnergy.count > energyCap {
+                inner.audioEnergy.removeFirst(inner.audioEnergy.count - energyCap)
+            }
+        }
+        bufferLock.unlock()
+        // Only feed a live session; while warm-idle there is no callback.
         isolationCallback?(buffer)
     }
 
@@ -183,6 +272,7 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
         engine.reset()
         isolationEngine = nil
         isolationCallback = nil
+        isWarmIdle = false
     }
 
     // MARK: - Straight passthrough
@@ -198,7 +288,14 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
         if isolationEngine != nil { isolationEngine?.pause() } else { inner.pauseRecording() }
     }
     func stopRecording() {
-        if isolationEngine != nil { teardownIsolationEngine() } else { inner.stopRecording() }
+        guard isolationEngine != nil else { inner.stopRecording(); return }
+        // Keep the engine flowing between sessions when warm-up is enabled, so the
+        // next dictation skips VPIO's ~800ms cold start. Otherwise fully release.
+        if keepWarmOnStop {
+            enterWarmIdle()
+        } else {
+            teardownIsolationEngine()
+        }
     }
     func padOrTrim(fromArray audioArray: [Float], startAt startIndex: Int, toLength frameLength: Int) -> (any AudioProcessorOutputType)? {
         inner.padOrTrim(fromArray: audioArray, startAt: startIndex, toLength: frameLength)

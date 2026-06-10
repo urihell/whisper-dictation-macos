@@ -34,6 +34,44 @@ enum ComputeBackend: String, CaseIterable, Identifiable {
     }
 }
 
+/// How long the microphone's Voice Processing engine stays warm after a dictation
+/// so the next one starts instantly. Apple's voice processing has a ~800ms cold
+/// start before any audio flows; keeping it warm skips that. Tradeoff: the macOS
+/// mic-in-use indicator stays on during the warm window. Bluetooth mics don't use
+/// voice processing and start instantly regardless, so this only affects the
+/// built-in / wired mic.
+enum MicWarmUp: String, CaseIterable, Identifiable {
+    case off
+    case sec15
+    case sec30
+    case min3
+    case always
+
+    var id: String { rawValue }
+
+    /// Seconds to keep the mic warm after a session; nil = never release (always),
+    /// 0 = release immediately (off).
+    var window: TimeInterval? {
+        switch self {
+        case .off: return 0
+        case .sec15: return 15
+        case .sec30: return 30
+        case .min3: return 180
+        case .always: return nil
+        }
+    }
+
+    var label: String {
+        switch self {
+        case .off: return "Off — release mic after each use"
+        case .sec15: return "15 seconds"
+        case .sec30: return "30 seconds (recommended)"
+        case .min3: return "3 minutes"
+        case .always: return "Always on — instant, mic stays active"
+        }
+    }
+}
+
 /// UserDefaults-backed preferences, observable for SwiftUI bindings.
 @MainActor
 final class AppSettings: ObservableObject {
@@ -112,6 +150,14 @@ final class AppSettings: ObservableObject {
     @Published var audioInputDeviceID: UInt32 {
         didSet { defaults.set(Int(audioInputDeviceID), forKey: Keys.audioInputDeviceID) }
     }
+    /// How long the mic's voice-processing engine stays warm after a dictation so
+    /// the next one starts instantly (built-in/wired mic only). Default 30 seconds
+    /// — short enough to rarely overlap a later call (where VPIO's echo
+    /// cancellation could interact with the call app's audio), long enough to keep
+    /// rapid back-to-back dictations instant.
+    @Published var micWarmUp: MicWarmUp {
+        didSet { defaults.set(micWarmUp.rawValue, forKey: Keys.micWarmUp) }
+    }
     /// When true, the trigger is a single key (intercepted globally) rather
     /// than a KeyboardShortcuts key combination.
     @Published var useSingleKey: Bool {
@@ -175,6 +221,7 @@ final class AppSettings: ObservableObject {
         stopSound = defaults.string(forKey: Keys.stopSound) ?? "Bottle"
         language = defaults.string(forKey: Keys.language) ?? "auto"
         audioInputDeviceID = UInt32(max(0, defaults.integer(forKey: Keys.audioInputDeviceID)))
+        micWarmUp = MicWarmUp(rawValue: defaults.string(forKey: Keys.micWarmUp) ?? "") ?? .sec30
         useSingleKey = defaults.object(forKey: Keys.useSingleKey) as? Bool ?? false
         doubleTapEnabled = defaults.object(forKey: Keys.doubleTapEnabled) as? Bool ?? false
         submitSendsReturn = defaults.object(forKey: Keys.submitSendsReturn) as? Bool ?? true
@@ -201,6 +248,7 @@ final class AppSettings: ObservableObject {
         static let stopSound = "stopSound"
         static let language = "language"
         static let audioInputDeviceID = "audioInputDeviceID"
+        static let micWarmUp = "micWarmUp"
         static let useSingleKey = "useSingleKey"
         static let doubleTapEnabled = "doubleTapEnabled"
         static let submitSendsReturn = "submitSendsReturn"
