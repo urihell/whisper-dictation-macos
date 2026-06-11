@@ -512,21 +512,11 @@ final class StreamingTranscriber: ObservableObject {
 
     private static let sampleRate: Double = 16_000
 
-    /// Common Whisper hallucinations on silence (YouTube-caption training
-    /// artifacts). Used only as a backstop when nothing was confirmed.
-    private static let silenceHallucinations: Set<String> = [
-        "thank you",
-        "thank you very much",
-        "thanks for watching",
-        "thank you for watching",
-    ]
-
-    private static let hallucinationTrim = CharacterSet.whitespacesAndNewlines
-        .union(CharacterSet(charactersIn: ".,!?…"))
-
+    /// Whisper's silence hallucinations — multilingual phrase + caption-credit
+    /// matching lives in `HallucinationFilter`. Used per-segment and as a
+    /// backstop when nothing was confirmed.
     private static func isLikelySilenceHallucination(_ text: String) -> Bool {
-        let normalized = text.lowercased().trimmingCharacters(in: hallucinationTrim)
-        return silenceHallucinations.contains(normalized)
+        HallucinationFilter.isLikelySilenceHallucination(text)
     }
 
     /// A segment counts as speech only if it isn't flagged no-speech AND isn't a
