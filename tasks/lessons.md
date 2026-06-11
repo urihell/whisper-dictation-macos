@@ -40,5 +40,43 @@
 - **Separate finding:** a SwiftUI/AttributeGraph teardown segfault (EXC_BAD_ACCESS
   in `DynamicViewListItem`/`DynamicContainer._ItemInfo` during `ViewGraphHost.
   tearDown`) surfaced after a `cancel()`/Escape. Stack is 100% Apple framework
-  code — no app symbols — and a structurally identical crash predates this work
-  (6/10). Treated as a pre-existing, unrelated bug, NOT caused by this fix.
+  code — no app symbols — NOT caused by the cold-start fix. See full
+  investigation below.
+
+## SwiftUI/AttributeGraph teardown crash — investigation (2026-06-11)
+- **Two crashes, NOT identical** (corrected an earlier wrong claim):
+  - 6/11: EXC_BAD_ACCESS / SIGSEGV at addr 0xfffffffffffffff0 (-16) on the MAIN
+    thread. Over-release signature. Stack: runloop → CoreAnimation txn commit →
+    autorelease pool drain → `ViewGraphHost.tearDown` → `GraphHost.invalidate` →
+    `DynamicContainerInfo`/`DynamicViewListItem` destroy → `swift_arrayDestroy`.
+  - 6/10: EXC_BREAKPOINT / SIGTRAP on a BACKGROUND dispatch thread, in
+    `AG::LayoutDescriptor::make_layout` / `TypeDescriptorCache::fetch`.
+  - Same subsystem (AttributeGraph), different phase/thread/signal. Both 100%
+    Apple-framework — zero app frames in the fault.
+- **Key structural fact:** `OverlayController.hide()` only calls `orderOut` and
+  KEEPS the HUD panel + its `NSHostingView` alive — the HUD view graph is never
+  torn down. So the crashing `ViewGraphHost.tearDown` is NOT the HUD. The graphs
+  that DO tear down are the `MenuBarExtra` dropdown (every close) and the
+  `Settings` window (on close). The crash's `DynamicViewListItem` matches a real
+  `ForEach` — and `SettingsView` has several (audioDevices/models/vocab/replacements).
+- **All `@Published`/observed-state holders are correctly main-confined** —
+  audited `StreamingTranscriber` (@MainActor), `StatusController` (@MainActor,
+  timer hops to main), `MicUsageMonitor` (CoreAudio listener → `Task{@MainActor}`).
+  No off-main mutation of SwiftUI state found. Ruled out the usual cause.
+- **Could NOT reproduce:** drove the menu-bar app via System Events —
+  50+ Settings open→cycle-all-5-tabs→close cycles AND 60 menu open/close cycles
+  = 110+ teardown cycles, ZERO crashes. So it is NOT a deterministic teardown
+  bug; it's a rare race (real crashes were 2 in days of use), and the real ones
+  coincided with an ACTIVE dictation (HUD `@ObservedObject` publishing ~8/sec)
+  overlapping a graph teardown.
+- **Conclusion:** most consistent with a macOS 26.5 SwiftUI/AttributeGraph
+  framework over-release during view-graph teardown, not a pinpointable app line.
+  Per systematic-debugging "no root cause" path: do NOT apply a speculative fix
+  to framework-internal crashes. Documented + monitor for recurrence.
+- **Repro-harness lesson:** `open -a App` on an ALREADY-running LSUIElement app
+  does NOT open Settings (window count stayed 0) and `open -n` spawns a 2nd
+  instance — both false negatives. The reliable drive is via System Events:
+  `click menu bar item 1 of menu bar 2` → `click menu item "Settings…" of menu 1`.
+  SwiftUI TabView tabs surface as `buttons of toolbar 1 of window 1` (NOT an AX
+  tab group). ALWAYS verify the harness actually performed the action (assert
+  window count > 0) before trusting a "no crash" result.
