@@ -70,6 +70,11 @@ final class StreamingTranscriber: ObservableObject {
     /// Called on the main actor when a background model load fails (e.g. no
     /// network on first download). The argument is the model name.
     var onModelLoadFailed: ((String) -> Void)?
+    /// Called on the main actor when the live stream loop fails mid-session
+    /// (mic open failure, decode error) — lets the controller tear the session
+    /// down visibly instead of leaving a dead "recording" UI. Never fired for
+    /// teardown of a superseded session (token-guarded) or plain cancellation.
+    var onStreamError: ((Error) -> Void)?
 
     private var whisperKit: WhisperKit?
     private var loadedModelName: String?
@@ -99,8 +104,24 @@ final class StreamingTranscriber: ObservableObject {
     /// lastBufferSize). Audio beyond this is the un-decoded tail at stop.
     private var lastDecodedSamples = 0
 
-    // Speech-activity detection (SoundAnalysis) used to suppress silent sessions.
-    private var vad: SpeechActivityDetector?
+    // Speech-activity detection (SoundAnalysis) used to suppress silent sessions
+    // and to confirm that hallucination-phrase suspects (a lone "Thank you")
+    // were actually spoken — see isSpeechSegment.
+    private var vad: SpeechActivityDetector? { vadHandle.detector }
+    /// Hands the session's detector to the stream callback, which runs off the
+    /// main actor. The detector is built asynchronously and adopted late, so the
+    /// reference itself needs a thread-safe home; the detector's own state is
+    /// already lock-guarded.
+    private let vadHandle = VADHandle()
+
+    private final class VADHandle: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _detector: SpeechActivityDetector?
+        var detector: SpeechActivityDetector? {
+            get { lock.withLock { _detector } }
+            set { lock.withLock { _detector = newValue } }
+        }
+    }
     /// Bumped on every session start/teardown. The async VAD build adopts its
     /// result only if this still matches — so a detector that finishes loading
     /// after the session already stopped is discarded instead of lingering.
@@ -230,7 +251,11 @@ final class StreamingTranscriber: ObservableObject {
                 Log.info("Switched active model to '\(modelName)'")
                 self.onModelReady?(modelName)
             } catch {
-                self.loadingModel = nil
+                // A superseded/cancelled load (model switched again, or Cancel
+                // pressed) throws on its way out — that's not a failure. Don't
+                // clear the *newer* load's state or toast a spurious error.
+                if error is CancellationError || Task.isCancelled { return }
+                if self.loadingModel == modelName { self.loadingModel = nil }
                 Log.error("Background model load failed for '\(modelName)': \(error.localizedDescription)")
                 self.onModelLoadFailed?(modelName)
             }
@@ -296,8 +321,13 @@ final class StreamingTranscriber: ObservableObject {
     /// Used by `start()` to resolve the device + VPIO decision for a session.
     @discardableResult
     private func configureVoiceProcessing(on proc: SelectableInputAudioProcessor) -> Bool {
-        let id = AppSettings.shared.audioInputDeviceID
-        let device: DeviceID? = (id == 0) ? nil : id
+        // Resolve the persisted device UID to a live runtime ID; nil (system
+        // default) when unset or the device isn't connected right now.
+        let uid = AppSettings.shared.audioInputDeviceUID
+        let device: DeviceID? = uid.isEmpty ? nil : SelectableInputAudioProcessor.deviceID(forUID: uid)
+        if !uid.isEmpty, device == nil {
+            Log.info("Selected input device not connected; using system default.")
+        }
         proc.selectedDeviceID = device
         let engage = SelectableInputAudioProcessor.shouldEngageVoiceProcessing(forInputDevice: device)
         proc.voiceIsolationEnabled = engage
@@ -377,6 +407,9 @@ final class StreamingTranscriber: ObservableObject {
             Log.info("Voice processing \(engage ? "ON (built-in/wired mic)" : "OFF (Bluetooth self-isolates)") for this session.")
         }
 
+        // Captured (strongly) by the stream callback below: the box outlives the
+        // session and delivers the late-built detector across threads.
+        let vadHandle = self.vadHandle
         let streamer = AudioStreamTranscriber(
             audioEncoder: whisperKit.audioEncoder,
             featureExtractor: whisperKit.featureExtractor,
@@ -396,9 +429,11 @@ final class StreamingTranscriber: ObservableObject {
             // heavy work here — drop no-speech / hallucination segments and build
             // the cleaned candidate string — so the main actor only assigns state
             // and publishes. (Whisper emits "Thank you." etc. on silence, so we
-            // filter by both noSpeechProb and known-phrase text.)
-            let confirmed = newState.confirmedSegments.filter(Self.isSpeechSegment).map(\.text).joined(separator: " ")
-            let unconfirmed = newState.unconfirmedSegments.filter(Self.isSpeechSegment).map(\.text).joined(separator: " ")
+            // filter by noSpeechProb and known-phrase text, with the VAD able to
+            // vouch for phrases that were really spoken.)
+            let vadNow = vadHandle.detector
+            let confirmed = newState.confirmedSegments.filter { Self.isSpeechSegment($0, vad: vadNow) }.map(\.text).joined(separator: " ")
+            let unconfirmed = newState.unconfirmedSegments.filter { Self.isSpeechSegment($0, vad: vadNow) }.map(\.text).joined(separator: " ")
             let current = newState.currentText
             let isIdle = (current == Self.placeholder)
             var livePartial = isIdle ? "" : current
@@ -426,14 +461,50 @@ final class StreamingTranscriber: ObservableObject {
 
         self.streamer = streamer
         Log.info("Starting stream transcription (language=\(language ?? "auto"))")
-        streamTask = Task {
+        streamTask = Task { [weak self] in
             do {
                 try await streamer.startStreamTranscription()
                 Log.info("Stream transcription loop ended")
             } catch {
                 Log.error("Stream transcription error: \(error.localizedDescription)")
+                // Surface only failures of the CURRENT session: stop()/forceStop()
+                // bump sessionToken before tearing the loop down, so teardown
+                // errors and cancellations stay silent.
+                guard let self, !(error is CancellationError), token == self.sessionToken else { return }
+                self.onStreamError?(error)
             }
         }
+
+        // Don't return (and let the controller cue "speak now") until the mic is
+        // actually capturing. On the VPIO path a COLD engine takes ~800ms to
+        // converge and deliver its first buffer — speaking into that gap silently
+        // loses the leading word(s). Block here until the first captured buffer
+        // lands, so the caller's "go" chime + .recording state are honest. The
+        // warm-adopt path delivers its first buffer in ~100ms (engine already
+        // flowing), so this is effectively instant there — no regression.
+        // Non-VPIO (Bluetooth) capture starts immediately, so skip the wait.
+        if voiceIsolationActive {
+            await waitForFirstCapturedBuffer(token: token)
+        }
+    }
+
+    /// Polls until the audio processor has delivered its first captured buffer,
+    /// the session is superseded (cancel/Escape/stop bumps `sessionToken`), or a
+    /// safety timeout elapses. Fail-open: if the mic never produces audio (denied
+    /// permission, dead device) we return after the timeout so dictation proceeds
+    /// exactly as before rather than hanging on the "preparing" state forever.
+    private func waitForFirstCapturedBuffer(token: Int) async {
+        let pollNs: UInt64 = 20_000_000          // 20ms
+        let maxPolls = 100                        // ~2s safety backstop
+        for _ in 0..<maxPolls {
+            guard token == sessionToken else { return }       // superseded → bail
+            if !(whisperKit?.audioProcessor.audioSamples.isEmpty ?? true) {
+                Log.info("Mic live — first buffer captured.")
+                return
+            }
+            try? await Task.sleep(nanoseconds: pollNs)
+        }
+        Log.info("Mic-warmup wait timed out (~2s) — proceeding without first-buffer confirmation.")
     }
 
     /// Stops streaming and returns the cleaned final transcript.
@@ -449,7 +520,11 @@ final class StreamingTranscriber: ObservableObject {
         audioLevel = 0
         voiceIsolationActive = false
         let suppress = vadSuppresses
-        Log.info("stop() — VAD \(vad?.stats ?? "n/a"), suppress=\(suppress)")
+        // Keep this session's detector alive past clearVAD(): the tail re-decode
+        // and the final hallucination backstop below still consult its recorded
+        // speech windows.
+        let sessionVAD = vad
+        Log.info("stop() — VAD \(sessionVAD?.stats ?? "n/a"), suppress=\(suppress)")
         clearVAD()
 
         guard !suppress else { return "" }
@@ -471,8 +546,13 @@ final class StreamingTranscriber: ObservableObject {
                 let opts = decodeOptions(language: sessionLanguage, tokenizer: tokenizer)
                 if let results = try? await whisperKit.transcribe(audioArray: tailAudio, decodeOptions: opts),
                    !results.isEmpty {
+                    // Tail segments are timed from the tail's start — offset
+                    // them back onto the session clock for the VAD check.
+                    let tailOffset = Double(start) / Self.sampleRate
                     let tailWords = Self.clean(
-                        results.flatMap { $0.segments }.filter(Self.isSpeechSegment).map(\.text).joined(separator: " ")
+                        results.flatMap { $0.segments }
+                            .filter { Self.isSpeechSegment($0, vad: sessionVAD, timeOffset: tailOffset) }
+                            .map(\.text).joined(separator: " ")
                     )
                     let prefix = Self.clean(confirmedText)
                     text = [prefix, tailWords].filter { !$0.isEmpty }.joined(separator: " ")
@@ -480,7 +560,14 @@ final class StreamingTranscriber: ObservableObject {
             }
         }
 
-        guard !text.isEmpty, !Self.isLikelySilenceHallucination(text) else { return "" }
+        guard !text.isEmpty else { return "" }
+        // Whole-text backstop, session-level: the joined text has no timestamps,
+        // so if the entire transcript is a known silence phrase, keep it only
+        // when the detector heard speech somewhere in the session. (Per-segment
+        // filtering above already did the time-aligned check.)
+        if Self.isLikelySilenceHallucination(text), sessionVAD?.everSpeech != true {
+            return ""
+        }
         return Self.applyReplacements(text, AppSettings.shared.replacements)
     }
 
@@ -503,30 +590,36 @@ final class StreamingTranscriber: ObservableObject {
 
     private static let sampleRate: Double = 16_000
 
-    /// Common Whisper hallucinations on silence (YouTube-caption training
-    /// artifacts). Used only as a backstop when nothing was confirmed.
-    private static let silenceHallucinations: Set<String> = [
-        "thank you",
-        "thank you very much",
-        "thanks for watching",
-        "thank you for watching",
-    ]
-
-    private static let hallucinationTrim = CharacterSet.whitespacesAndNewlines
-        .union(CharacterSet(charactersIn: ".,!?…"))
-
+    /// Whisper's silence hallucinations — multilingual phrase + caption-credit
+    /// matching lives in `HallucinationFilter`. Used per-segment and as a
+    /// backstop when nothing was confirmed.
     private static func isLikelySilenceHallucination(_ text: String) -> Bool {
-        let normalized = text.lowercased().trimmingCharacters(in: hallucinationTrim)
-        return silenceHallucinations.contains(normalized)
+        HallucinationFilter.isLikelySilenceHallucination(text)
     }
 
     /// A segment counts as speech only if it isn't flagged no-speech AND isn't a
-    /// known silence hallucination. Whisper often emits "Thank you." on silence
-    /// with a *low* noSpeechProb (a confident hallucination), so the probability
-    /// check alone misses it — reject the phrase by text too.
-    private static func isSpeechSegment(_ seg: TranscriptionSegment) -> Bool {
+    /// silence hallucination. Whisper often emits "Thank you." on silence with a
+    /// *low* noSpeechProb (a confident hallucination), so the probability check
+    /// alone misses it — the text has to be checked too. But a phrase match
+    /// alone no longer condemns the segment: if the acoustic speech detector saw
+    /// speech under the segment's time range, the phrase was really spoken —
+    /// keep it. With no detector evidence (still loading, results lagging,
+    /// genuine silence) the segment is dropped, exactly the old text-only
+    /// behavior. `timeOffset` maps segment-relative times onto the session-audio
+    /// clock (the stop() tail re-decode produces segments timed from the tail's
+    /// start, not the session's).
+    private static func isSpeechSegment(
+        _ seg: TranscriptionSegment,
+        vad: SpeechActivityDetector?,
+        timeOffset: Double = 0
+    ) -> Bool {
         guard seg.noSpeechProb <= noSpeechThreshold else { return false }
-        return !isLikelySilenceHallucination(seg.text)
+        guard HallucinationFilter.isLikelySilenceHallucination(seg.text) else { return true }
+        guard let vad else { return false }
+        return vad.sawSpeech(
+            betweenSeconds: Double(seg.start) + timeOffset,
+            and: Double(seg.end) + timeOffset
+        )
     }
 
     /// Applies user replacements (heard → corrected), case-insensitively.
@@ -563,7 +656,7 @@ final class StreamingTranscriber: ObservableObject {
     /// fails open (never drops speech) until it's ready, so building it
     /// asynchronously is free and removes the stall.
     private func startVAD() {
-        vad = nil
+        vadHandle.detector = nil
         vadSessionToken &+= 1
         let token = vadSessionToken
         Task.detached(priority: .utility) { [weak self] in
@@ -576,12 +669,12 @@ final class StreamingTranscriber: ObservableObject {
     /// stopped while it was loading (token mismatch → discard).
     private func adoptVAD(_ detector: SpeechActivityDetector?, token: Int) {
         guard token == vadSessionToken else { return }
-        vad = detector
+        vadHandle.detector = detector
     }
 
     /// Tears down the detector and invalidates any in-flight async build.
     private func clearVAD() {
-        vad = nil
+        vadHandle.detector = nil
         vadSessionToken &+= 1
     }
 

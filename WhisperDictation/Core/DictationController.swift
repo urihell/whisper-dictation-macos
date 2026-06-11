@@ -45,6 +45,13 @@ final class DictationController: ObservableObject {
                 "⚠️ Couldn't load \(Self.friendlyModelName(modelName)) — check your internet connection"
             )
         }
+        // The stream loop failing mid-session (mic open failure, decode error)
+        // would otherwise only be logged — leaving a dead "recording" UI with a
+        // silent mic. Tear the session down visibly instead.
+        transcriber.onStreamError = { [weak self] error in
+            guard let self, self.isActive else { return }
+            self.fail(error)
+        }
     }
 
     /// Loads the configured model in the background so it's ready (or compiling)
@@ -144,19 +151,27 @@ final class DictationController: ObservableObject {
         // stops, per the user's setting. (The actual warm engine, if any, is
         // adopted instantly inside start() → startRecordingLive.)
         transcriber.setKeepWarm(AppSettings.shared.micWarmUp != .off)
-        SoundFeedback.start()
+        // HUD shows "preparing…" immediately for visual feedback, but the audio
+        // "go" cue is held until the mic is actually capturing (see below) — on a
+        // cold VPIO start the engine takes ~800ms to converge, and chiming "speak
+        // now" before then loses the leading word into the dead-zone.
         setState(.preparing)
         OverlayController.shared.show()
         startSessionKeys()
         Task {
             do {
                 try await transcriber.start(language: AppSettings.shared.forcedLanguageCode)
-                // If the user already released (push-to-talk) we may have been
-                // moved out of .preparing; only advance if still preparing.
-                if state == .preparing { setState(.recording) }
+                // transcriber.start() only returns once the mic has delivered its
+                // first captured buffer (or timed out), so now the "go" cue is
+                // honest. If the user already released (push-to-talk) we may have
+                // been moved out of .preparing; only advance + chime if still
+                // preparing.
+                if state == .preparing {
+                    SoundFeedback.start()
+                    setState(.recording)
+                }
                 Log.info("begin() — now \(String(describing: state))")
             } catch {
-                OverlayController.shared.hide()
                 fail(error)
             }
         }
@@ -166,7 +181,11 @@ final class DictationController: ObservableObject {
     /// setting; otherwise force on/off (used by submit).
     func end(pressReturn: Bool? = nil) async {
         guard state == .preparing || state == .recording else { return }
-        SoundFeedback.stop()
+        // Only cue "stopped" if "go" ever cued: a fast push-to-talk release can
+        // end the session from .preparing — before the start chime played (it
+        // waits for the mic to be live) — and a lone stop sound there reads as
+        // a glitch.
+        if state == .recording { SoundFeedback.stop() }
         stopSessionKeys()
 
         setState(.transcribing)
@@ -214,11 +233,15 @@ final class DictationController: ObservableObject {
     }
 
     /// Aborts the current session and discards the transcript (Escape).
-    func cancel() async {
+    /// Synchronous on purpose: the transcript is discarded, so there's nothing
+    /// to await — `setState(.idle)` routes through `forceStop()`, which tears
+    /// the stream down without the final tail re-decode. Moving out of
+    /// `.recording` immediately also closes the window where a trigger press
+    /// mid-cancel could start a concurrent `end()` and insert cancelled text.
+    func cancel() {
         guard state == .preparing || state == .recording else { return }
         Log.info("cancel() — discarding dictation")
         stopSessionKeys()
-        _ = await transcriber.stop()
         OverlayController.shared.hide()
         setState(.idle)
     }
@@ -227,7 +250,7 @@ final class DictationController: ObservableObject {
 
     private func startSessionKeys() {
         let tap = SessionKeyTap.shared
-        tap.onEscape = { Task { await DictationController.shared.cancel() } }
+        tap.onEscape = { DictationController.shared.cancel() }
         tap.shouldHandleReturn = { AppSettings.shared.doubleTapEnabled }
         tap.onReturn = { DictationController.shared.submit() }
         tap.start()
@@ -349,6 +372,7 @@ final class DictationController: ObservableObject {
     private func fail(_ error: Error) {
         stopSessionKeys()
         transcriber.forceStop()
+        OverlayController.shared.hide()
         lastError = error.localizedDescription
         Log.error("Dictation failed: \(error.localizedDescription)")
         OverlayController.shared.toast("⚠️ \(error.localizedDescription)")

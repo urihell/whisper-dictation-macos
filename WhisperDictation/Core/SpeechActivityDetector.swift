@@ -7,8 +7,14 @@ import SoundAnalysis
 /// so it recognizes quiet speech that an energy threshold can't separate from
 /// silence.
 ///
-/// Currently instrumentation-only: it reports detection stats (via `stats`) so
-/// we can verify reliability against this mic before gating any transcript on it.
+/// Two consumers:
+///  - session suppression (`everSpeech` via the transcriber's `vadSuppresses`):
+///    a session the classifier is confident contained no speech is discarded;
+///  - time-aligned confirmation (`sawSpeech(betweenSeconds:and:)`): the
+///    classifier windows share the session-audio clock with Whisper's segment
+///    timestamps (both count 16 kHz samples from session start), so the
+///    transcriber can check whether a hallucination-phrase suspect like a lone
+///    "Thank you" had real speech under it — spoken, not hallucinated.
 // @unchecked Sendable: all mutable state is guarded by `lock`, and analysis is
 // serialized on `analysisQueue` — so an instance can be built on a background
 // task (its init does a one-time, potentially slow Core ML/ANE load) and then
@@ -24,6 +30,10 @@ final class SpeechActivityDetector: NSObject, SNResultsObserving, @unchecked Sen
     private var _maxSpeechConfidence: Double = 0
     private var _resultCount = 0
     private var _lastTopLabel = ""
+    /// Analysis windows (seconds in session audio) where speech was detected.
+    /// One entry per ~1s classifier window, so this stays small even for long
+    /// dictations.
+    private var _speechIntervals: [(start: Double, end: Double)] = []
 
     /// Confidence at/above which we consider "speech" present.
     static let speechThreshold: Double = 0.3
@@ -66,10 +76,22 @@ final class SpeechActivityDetector: NSObject, SNResultsObserving, @unchecked Sen
     var maxSpeechConfidence: Double { lock.withLock { _maxSpeechConfidence } }
     var resultCount: Int { lock.withLock { _resultCount } }
 
+    /// Whether the classifier saw speech in a window overlapping `start...end`
+    /// (seconds in session audio). `tolerance` pads both sides: Whisper's
+    /// segment timestamps and the ~1s analysis windows are both approximate, so
+    /// a strict overlap would miss speech right at a segment edge.
+    func sawSpeech(betweenSeconds start: Double, and end: Double, tolerance: Double = 0.5) -> Bool {
+        let lo = start - tolerance
+        let hi = end + tolerance
+        return lock.withLock {
+            _speechIntervals.contains { $0.start < hi && $0.end > lo }
+        }
+    }
+
     /// One-line summary for diagnostics/calibration.
     var stats: String {
         lock.withLock {
-            "everSpeech=\(_everSpeech), maxSpeechConf=\(String(format: "%.2f", _maxSpeechConfidence)), results=\(_resultCount), top=\(_lastTopLabel)"
+            "everSpeech=\(_everSpeech), maxSpeechConf=\(String(format: "%.2f", _maxSpeechConfidence)), results=\(_resultCount), speechWindows=\(_speechIntervals.count), top=\(_lastTopLabel)"
         }
     }
 
@@ -78,11 +100,17 @@ final class SpeechActivityDetector: NSObject, SNResultsObserving, @unchecked Sen
         guard let result = result as? SNClassificationResult else { return }
         let speechConf = result.classification(forIdentifier: "speech")?.confidence ?? 0
         let top = result.classifications.first?.identifier ?? ""
+        // The result's window is on the session-audio clock because analyze()
+        // positions buffers by absolute frame at the format's sample rate.
+        let window = result.timeRange
         lock.withLock {
             _resultCount += 1
             _lastTopLabel = top
             if speechConf > _maxSpeechConfidence { _maxSpeechConfidence = speechConf }
-            if speechConf >= Self.speechThreshold { _everSpeech = true }
+            if speechConf >= Self.speechThreshold {
+                _everSpeech = true
+                _speechIntervals.append((window.start.seconds, window.end.seconds))
+            }
         }
     }
 
