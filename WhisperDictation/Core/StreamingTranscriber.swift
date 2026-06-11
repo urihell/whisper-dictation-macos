@@ -230,7 +230,11 @@ final class StreamingTranscriber: ObservableObject {
                 Log.info("Switched active model to '\(modelName)'")
                 self.onModelReady?(modelName)
             } catch {
-                self.loadingModel = nil
+                // A superseded/cancelled load (model switched again, or Cancel
+                // pressed) throws on its way out — that's not a failure. Don't
+                // clear the *newer* load's state or toast a spurious error.
+                if error is CancellationError || Task.isCancelled { return }
+                if self.loadingModel == modelName { self.loadingModel = nil }
                 Log.error("Background model load failed for '\(modelName)': \(error.localizedDescription)")
                 self.onModelLoadFailed?(modelName)
             }
@@ -296,8 +300,13 @@ final class StreamingTranscriber: ObservableObject {
     /// Used by `start()` to resolve the device + VPIO decision for a session.
     @discardableResult
     private func configureVoiceProcessing(on proc: SelectableInputAudioProcessor) -> Bool {
-        let id = AppSettings.shared.audioInputDeviceID
-        let device: DeviceID? = (id == 0) ? nil : id
+        // Resolve the persisted device UID to a live runtime ID; nil (system
+        // default) when unset or the device isn't connected right now.
+        let uid = AppSettings.shared.audioInputDeviceUID
+        let device: DeviceID? = uid.isEmpty ? nil : SelectableInputAudioProcessor.deviceID(forUID: uid)
+        if !uid.isEmpty, device == nil {
+            Log.info("Selected input device not connected; using system default.")
+        }
         proc.selectedDeviceID = device
         let engage = SelectableInputAudioProcessor.shouldEngageVoiceProcessing(forInputDevice: device)
         proc.voiceIsolationEnabled = engage

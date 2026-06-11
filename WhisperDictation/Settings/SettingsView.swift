@@ -5,10 +5,17 @@ import LaunchAtLogin
 import WhisperKit
 
 struct SettingsView: View {
+    /// An input device row for the picker, identified by its persistent Core
+    /// Audio UID (stable across reboots, unlike the runtime `AudioDeviceID`).
+    private struct AudioInputDevice: Identifiable {
+        let id: String
+        let name: String
+    }
+
     @StateObject private var settings = AppSettings.shared
     @ObservedObject private var transcriber = DictationController.shared.transcriber
     @State private var models: [String] = []
-    @State private var audioDevices: [AudioDevice] = []
+    @State private var audioDevices: [AudioInputDevice] = []
     @State private var showDeleteError = false
     @State private var deleteError: String?
     @State private var newTerm = ""
@@ -249,10 +256,17 @@ struct SettingsView: View {
 
     private var audio: some View {
         Form {
-            Picker("Input device", selection: $settings.audioInputDeviceID) {
-                Text("System Default").tag(UInt32(0))
+            Picker("Input device", selection: $settings.audioInputDeviceUID) {
+                Text("System Default").tag("")
                 ForEach(audioDevices) { device in
                     Text(device.name).tag(device.id)
+                }
+                // A saved device that isn't connected right now stays selected
+                // (sessions fall back to the system default until it returns)
+                // rather than being silently reset.
+                if !settings.audioInputDeviceUID.isEmpty,
+                   !audioDevices.contains(where: { $0.id == settings.audioInputDeviceUID }) {
+                    Text("Saved device (not connected)").tag(settings.audioInputDeviceUID)
                 }
             }
 
@@ -291,11 +305,10 @@ struct SettingsView: View {
     }
 
     private func reloadAudioDevices() {
-        audioDevices = AudioProcessor.getAudioDevices()
-        // If the saved device is gone (e.g. unplugged), fall back to the default.
-        if settings.audioInputDeviceID != 0,
-           !audioDevices.contains(where: { $0.id == settings.audioInputDeviceID }) {
-            settings.audioInputDeviceID = 0
+        audioDevices = AudioProcessor.getAudioDevices().compactMap { device in
+            SelectableInputAudioProcessor.deviceUID(for: device.id).map {
+                AudioInputDevice(id: $0, name: device.name)
+            }
         }
     }
 

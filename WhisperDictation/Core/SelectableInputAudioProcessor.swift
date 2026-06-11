@@ -277,13 +277,27 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
 
     // MARK: - Straight passthrough
 
-    var audioSamples: ContiguousArray<Float> { inner.audioSamples }
-    var relativeEnergy: [Float] { inner.relativeEnergy }
+    // The buffer reads/mutations below take `bufferLock` so they can't observe
+    // `inner`'s arrays mid-`append` from `ingest` (COW reallocation race) on the
+    // VPIO path. On the forwarded (non-VPIO) path `inner`'s own tap appends
+    // without this lock — an upstream WhisperKit pattern we can't reach — but
+    // the lock is uncontended there, so taking it costs nothing.
+    var audioSamples: ContiguousArray<Float> {
+        bufferLock.lock(); defer { bufferLock.unlock() }
+        return inner.audioSamples
+    }
+    var relativeEnergy: [Float] {
+        bufferLock.lock(); defer { bufferLock.unlock() }
+        return inner.relativeEnergy
+    }
     var relativeEnergyWindow: Int {
         get { inner.relativeEnergyWindow }
         set { inner.relativeEnergyWindow = newValue }
     }
-    func purgeAudioSamples(keepingLast keep: Int) { inner.purgeAudioSamples(keepingLast: keep) }
+    func purgeAudioSamples(keepingLast keep: Int) {
+        bufferLock.lock(); defer { bufferLock.unlock() }
+        inner.purgeAudioSamples(keepingLast: keep)
+    }
     func pauseRecording() {
         if isolationEngine != nil { isolationEngine?.pause() } else { inner.pauseRecording() }
     }
@@ -333,6 +347,46 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
         let resolved = (deviceID ?? 0) != 0 ? deviceID! : defaultInputDeviceID()
         guard let resolved else { return true } // unknown → safe default (built-in behavior)
         return !isBluetoothDevice(resolved)
+    }
+
+    /// The device's persistent UID (`kAudioDevicePropertyDeviceUID`), or nil.
+    /// `AudioDeviceID`s are runtime handles that change across reboots and
+    /// replugs — the UID is the only identity safe to persist in settings.
+    static func deviceUID(for deviceID: DeviceID) -> String? {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyDeviceUID,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var uid: CFString?
+        var size = UInt32(MemoryLayout<CFString?>.size)
+        let err = withUnsafeMutablePointer(to: &uid) { ptr in
+            AudioObjectGetPropertyData(AudioObjectID(deviceID), &addr, 0, nil, &size, ptr)
+        }
+        guard err == noErr, let uid else { return nil }
+        return uid as String
+    }
+
+    /// Resolves a persisted device UID to the device's current runtime ID, or
+    /// nil if the device isn't connected right now.
+    static func deviceID(forUID uid: String) -> DeviceID? {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyTranslateUIDToDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var deviceID = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var uidCF = uid as CFString
+        let err = withUnsafeMutablePointer(to: &uidCF) { uidPtr in
+            AudioObjectGetPropertyData(
+                AudioObjectID(kAudioObjectSystemObject), &addr,
+                UInt32(MemoryLayout<CFString>.size), uidPtr,
+                &size, &deviceID
+            )
+        }
+        guard err == noErr, deviceID != 0 else { return nil }
+        return deviceID
     }
 
     /// The current system default input device, or nil if it can't be read.

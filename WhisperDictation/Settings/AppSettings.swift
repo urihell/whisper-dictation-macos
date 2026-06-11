@@ -1,5 +1,6 @@
 import Foundation
 import Combine
+import CoreAudio
 
 enum TriggerMode: String, CaseIterable, Identifiable {
     case toggle
@@ -145,10 +146,12 @@ final class AppSettings: ObservableObject {
     @Published var language: String {
         didSet { defaults.set(language, forKey: Keys.language) }
     }
-    /// Core Audio input device id to capture from. 0 = follow the system default
-    /// input device. Stored as Int in UserDefaults.
-    @Published var audioInputDeviceID: UInt32 {
-        didSet { defaults.set(Int(audioInputDeviceID), forKey: Keys.audioInputDeviceID) }
+    /// Persistent UID of the input device to capture from ("" = follow the
+    /// system default). Stored as the Core Audio device UID, not the runtime
+    /// `AudioDeviceID` — IDs change across reboots/replugs, so a persisted ID
+    /// could silently point at a different microphone later.
+    @Published var audioInputDeviceUID: String {
+        didSet { defaults.set(audioInputDeviceUID, forKey: Keys.audioInputDeviceUID) }
     }
     /// How long the mic's voice-processing engine stays warm after a dictation so
     /// the next one starts instantly (built-in/wired mic only). Default 30 seconds
@@ -220,7 +223,20 @@ final class AppSettings: ObservableObject {
         startSound = defaults.string(forKey: Keys.startSound) ?? "Pop"
         stopSound = defaults.string(forKey: Keys.stopSound) ?? "Bottle"
         language = defaults.string(forKey: Keys.language) ?? "auto"
-        audioInputDeviceID = UInt32(max(0, defaults.integer(forKey: Keys.audioInputDeviceID)))
+        // Migrate the legacy runtime-ID setting (one-time, best-effort): if the
+        // old device ID still resolves, keep the user's choice as a stable UID;
+        // otherwise fall back to the system default.
+        var deviceUID = defaults.string(forKey: Keys.audioInputDeviceUID) ?? ""
+        let legacyDeviceID = defaults.integer(forKey: Keys.legacyAudioInputDeviceID)
+        if legacyDeviceID > 0 {
+            if deviceUID.isEmpty,
+               let migrated = SelectableInputAudioProcessor.deviceUID(for: AudioDeviceID(legacyDeviceID)) {
+                deviceUID = migrated
+                defaults.set(migrated, forKey: Keys.audioInputDeviceUID)
+            }
+            defaults.removeObject(forKey: Keys.legacyAudioInputDeviceID)
+        }
+        audioInputDeviceUID = deviceUID
         micWarmUp = MicWarmUp(rawValue: defaults.string(forKey: Keys.micWarmUp) ?? "") ?? .sec30
         useSingleKey = defaults.object(forKey: Keys.useSingleKey) as? Bool ?? false
         doubleTapEnabled = defaults.object(forKey: Keys.doubleTapEnabled) as? Bool ?? false
@@ -247,7 +263,9 @@ final class AppSettings: ObservableObject {
         static let startSound = "startSound"
         static let stopSound = "stopSound"
         static let language = "language"
-        static let audioInputDeviceID = "audioInputDeviceID"
+        static let audioInputDeviceUID = "audioInputDeviceUID"
+        /// Pre-UID storage of the runtime AudioDeviceID; read once for migration.
+        static let legacyAudioInputDeviceID = "audioInputDeviceID"
         static let micWarmUp = "micWarmUp"
         static let useSingleKey = "useSingleKey"
         static let doubleTapEnabled = "doubleTapEnabled"

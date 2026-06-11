@@ -40,10 +40,19 @@ final class HotkeyManager {
     /// Call after the trigger style or single key changes.
     func reconfigure() {
         let settings = AppSettings.shared
-        if settings.useSingleKey, settings.singleKeyCode >= 0 {
-            SingleKeyMonitor.shared.start(keyCode: CGKeyCode(settings.singleKeyCode))
+        if settings.useSingleKey {
+            // Unregister the key combo while single-key mode is active: a
+            // registered hotkey consumes its keystroke system-wide even when
+            // the handler ignores it, which would leave e.g. ⌥Space dead.
+            KeyboardShortcuts.disable(.toggleDictation)
+            if settings.singleKeyCode >= 0 {
+                SingleKeyMonitor.shared.start(keyCode: CGKeyCode(settings.singleKeyCode))
+            } else {
+                SingleKeyMonitor.shared.stop()
+            }
         } else {
             SingleKeyMonitor.shared.stop()
+            KeyboardShortcuts.enable(.toggleDictation)
         }
     }
 }

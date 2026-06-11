@@ -214,11 +214,15 @@ final class DictationController: ObservableObject {
     }
 
     /// Aborts the current session and discards the transcript (Escape).
-    func cancel() async {
+    /// Synchronous on purpose: the transcript is discarded, so there's nothing
+    /// to await — `setState(.idle)` routes through `forceStop()`, which tears
+    /// the stream down without the final tail re-decode. Moving out of
+    /// `.recording` immediately also closes the window where a trigger press
+    /// mid-cancel could start a concurrent `end()` and insert cancelled text.
+    func cancel() {
         guard state == .preparing || state == .recording else { return }
         Log.info("cancel() — discarding dictation")
         stopSessionKeys()
-        _ = await transcriber.stop()
         OverlayController.shared.hide()
         setState(.idle)
     }
@@ -227,7 +231,7 @@ final class DictationController: ObservableObject {
 
     private func startSessionKeys() {
         let tap = SessionKeyTap.shared
-        tap.onEscape = { Task { await DictationController.shared.cancel() } }
+        tap.onEscape = { DictationController.shared.cancel() }
         tap.shouldHandleReturn = { AppSettings.shared.doubleTapEnabled }
         tap.onReturn = { DictationController.shared.submit() }
         tap.start()

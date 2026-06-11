@@ -12,6 +12,11 @@ final class OverlayController {
     private var panel: NSPanel?
     private var toastPanel: NSPanel?
     private var toastHide: DispatchWorkItem?
+    /// Bumped on every show()/hide() so a hide animation's completion can tell
+    /// it was superseded. Without this, a show() during the ~0.16s fade-out
+    /// (instant restarts via the warm mic) gets its panel ordered out by the
+    /// stale completion, leaving the HUD invisible for the whole session.
+    private var hideGeneration = 0
 
     private init() {}
 
@@ -81,6 +86,7 @@ final class OverlayController {
     }
 
     func show() {
+        hideGeneration += 1   // invalidate any in-flight hide completion
         let panel = panel ?? makePanel()
         self.panel = panel
         reposition(panel)
@@ -106,6 +112,8 @@ final class OverlayController {
 
     func hide() {
         guard let panel else { return }
+        hideGeneration += 1
+        let generation = hideGeneration
         guard !reduceMotion else { panel.orderOut(nil); return }
 
         let origin = panel.frame.origin
@@ -114,7 +122,11 @@ final class OverlayController {
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
             panel.animator().alphaValue = 0
             panel.animator().setFrameOrigin(NSPoint(x: origin.x, y: origin.y - 8))
-        }, completionHandler: { panel.orderOut(nil) })
+        }, completionHandler: { [weak self] in
+            // Only order out if no show()/hide() superseded this animation.
+            guard self?.hideGeneration == generation else { return }
+            panel.orderOut(nil)
+        })
     }
 
     private func makePanel() -> NSPanel {
