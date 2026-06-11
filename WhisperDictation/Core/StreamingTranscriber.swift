@@ -70,6 +70,11 @@ final class StreamingTranscriber: ObservableObject {
     /// Called on the main actor when a background model load fails (e.g. no
     /// network on first download). The argument is the model name.
     var onModelLoadFailed: ((String) -> Void)?
+    /// Called on the main actor when the live stream loop fails mid-session
+    /// (mic open failure, decode error) — lets the controller tear the session
+    /// down visibly instead of leaving a dead "recording" UI. Never fired for
+    /// teardown of a superseded session (token-guarded) or plain cancellation.
+    var onStreamError: ((Error) -> Void)?
 
     private var whisperKit: WhisperKit?
     private var loadedModelName: String?
@@ -456,12 +461,17 @@ final class StreamingTranscriber: ObservableObject {
 
         self.streamer = streamer
         Log.info("Starting stream transcription (language=\(language ?? "auto"))")
-        streamTask = Task {
+        streamTask = Task { [weak self] in
             do {
                 try await streamer.startStreamTranscription()
                 Log.info("Stream transcription loop ended")
             } catch {
                 Log.error("Stream transcription error: \(error.localizedDescription)")
+                // Surface only failures of the CURRENT session: stop()/forceStop()
+                // bump sessionToken before tearing the loop down, so teardown
+                // errors and cancellations stay silent.
+                guard let self, !(error is CancellationError), token == self.sessionToken else { return }
+                self.onStreamError?(error)
             }
         }
 

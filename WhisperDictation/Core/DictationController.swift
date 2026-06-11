@@ -45,6 +45,13 @@ final class DictationController: ObservableObject {
                 "⚠️ Couldn't load \(Self.friendlyModelName(modelName)) — check your internet connection"
             )
         }
+        // The stream loop failing mid-session (mic open failure, decode error)
+        // would otherwise only be logged — leaving a dead "recording" UI with a
+        // silent mic. Tear the session down visibly instead.
+        transcriber.onStreamError = { [weak self] error in
+            guard let self, self.isActive else { return }
+            self.fail(error)
+        }
     }
 
     /// Loads the configured model in the background so it's ready (or compiling)
@@ -165,7 +172,6 @@ final class DictationController: ObservableObject {
                 }
                 Log.info("begin() — now \(String(describing: state))")
             } catch {
-                OverlayController.shared.hide()
                 fail(error)
             }
         }
@@ -175,7 +181,11 @@ final class DictationController: ObservableObject {
     /// setting; otherwise force on/off (used by submit).
     func end(pressReturn: Bool? = nil) async {
         guard state == .preparing || state == .recording else { return }
-        SoundFeedback.stop()
+        // Only cue "stopped" if "go" ever cued: a fast push-to-talk release can
+        // end the session from .preparing — before the start chime played (it
+        // waits for the mic to be live) — and a lone stop sound there reads as
+        // a glitch.
+        if state == .recording { SoundFeedback.stop() }
         stopSessionKeys()
 
         setState(.transcribing)
@@ -362,6 +372,7 @@ final class DictationController: ObservableObject {
     private func fail(_ error: Error) {
         stopSessionKeys()
         transcriber.forceStop()
+        OverlayController.shared.hide()
         lastError = error.localizedDescription
         Log.error("Dictation failed: \(error.localizedDescription)")
         OverlayController.shared.toast("⚠️ \(error.localizedDescription)")
