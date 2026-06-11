@@ -9,11 +9,14 @@ import Foundation
 ///
 /// Two match classes:
 ///  - **Phrases** — exact match after normalization. The thank-you /
-///    thanks-for-watching family per language. Deliberate tradeoff (same as
-///    the original English-only list): a genuine lone "Merci." dictation is
-///    sacrificed to kill the #1 silence artifact in that language. Only the
-///    most-reported artifacts are listed; anything a user plausibly dictates
-///    as part of a longer sentence is unaffected (matching is whole-text).
+///    thanks-for-watching family per language. A match marks the text as a
+///    *suspect*, not an automatic drop: the transcriber consults the acoustic
+///    speech detector (time-aligned VAD) and keeps a suspect that had real
+///    speech under its time range — so a genuinely dictated lone "Merci."
+///    survives whenever the detector is live. Only with no acoustic evidence
+///    (true silence, or the detector still loading) is the suspect dropped.
+///    Anything dictated as part of a longer sentence is unaffected regardless
+///    (matching is whole-text).
 ///  - **Markers** — substring match for caption-credit artifacts whose wording
 ///    varies around a stable core (site names, broadcaster credits, subtitler
 ///    sign-offs) and which never occur in real dictation.

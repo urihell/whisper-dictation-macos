@@ -99,8 +99,24 @@ final class StreamingTranscriber: ObservableObject {
     /// lastBufferSize). Audio beyond this is the un-decoded tail at stop.
     private var lastDecodedSamples = 0
 
-    // Speech-activity detection (SoundAnalysis) used to suppress silent sessions.
-    private var vad: SpeechActivityDetector?
+    // Speech-activity detection (SoundAnalysis) used to suppress silent sessions
+    // and to confirm that hallucination-phrase suspects (a lone "Thank you")
+    // were actually spoken — see isSpeechSegment.
+    private var vad: SpeechActivityDetector? { vadHandle.detector }
+    /// Hands the session's detector to the stream callback, which runs off the
+    /// main actor. The detector is built asynchronously and adopted late, so the
+    /// reference itself needs a thread-safe home; the detector's own state is
+    /// already lock-guarded.
+    private let vadHandle = VADHandle()
+
+    private final class VADHandle: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _detector: SpeechActivityDetector?
+        var detector: SpeechActivityDetector? {
+            get { lock.withLock { _detector } }
+            set { lock.withLock { _detector = newValue } }
+        }
+    }
     /// Bumped on every session start/teardown. The async VAD build adopts its
     /// result only if this still matches — so a detector that finishes loading
     /// after the session already stopped is discarded instead of lingering.
@@ -386,6 +402,9 @@ final class StreamingTranscriber: ObservableObject {
             Log.info("Voice processing \(engage ? "ON (built-in/wired mic)" : "OFF (Bluetooth self-isolates)") for this session.")
         }
 
+        // Captured (strongly) by the stream callback below: the box outlives the
+        // session and delivers the late-built detector across threads.
+        let vadHandle = self.vadHandle
         let streamer = AudioStreamTranscriber(
             audioEncoder: whisperKit.audioEncoder,
             featureExtractor: whisperKit.featureExtractor,
@@ -405,9 +424,11 @@ final class StreamingTranscriber: ObservableObject {
             // heavy work here — drop no-speech / hallucination segments and build
             // the cleaned candidate string — so the main actor only assigns state
             // and publishes. (Whisper emits "Thank you." etc. on silence, so we
-            // filter by both noSpeechProb and known-phrase text.)
-            let confirmed = newState.confirmedSegments.filter(Self.isSpeechSegment).map(\.text).joined(separator: " ")
-            let unconfirmed = newState.unconfirmedSegments.filter(Self.isSpeechSegment).map(\.text).joined(separator: " ")
+            // filter by noSpeechProb and known-phrase text, with the VAD able to
+            // vouch for phrases that were really spoken.)
+            let vadNow = vadHandle.detector
+            let confirmed = newState.confirmedSegments.filter { Self.isSpeechSegment($0, vad: vadNow) }.map(\.text).joined(separator: " ")
+            let unconfirmed = newState.unconfirmedSegments.filter { Self.isSpeechSegment($0, vad: vadNow) }.map(\.text).joined(separator: " ")
             let current = newState.currentText
             let isIdle = (current == Self.placeholder)
             var livePartial = isIdle ? "" : current
@@ -458,7 +479,11 @@ final class StreamingTranscriber: ObservableObject {
         audioLevel = 0
         voiceIsolationActive = false
         let suppress = vadSuppresses
-        Log.info("stop() — VAD \(vad?.stats ?? "n/a"), suppress=\(suppress)")
+        // Keep this session's detector alive past clearVAD(): the tail re-decode
+        // and the final hallucination backstop below still consult its recorded
+        // speech windows.
+        let sessionVAD = vad
+        Log.info("stop() — VAD \(sessionVAD?.stats ?? "n/a"), suppress=\(suppress)")
         clearVAD()
 
         guard !suppress else { return "" }
@@ -480,8 +505,13 @@ final class StreamingTranscriber: ObservableObject {
                 let opts = decodeOptions(language: sessionLanguage, tokenizer: tokenizer)
                 if let results = try? await whisperKit.transcribe(audioArray: tailAudio, decodeOptions: opts),
                    !results.isEmpty {
+                    // Tail segments are timed from the tail's start — offset
+                    // them back onto the session clock for the VAD check.
+                    let tailOffset = Double(start) / Self.sampleRate
                     let tailWords = Self.clean(
-                        results.flatMap { $0.segments }.filter(Self.isSpeechSegment).map(\.text).joined(separator: " ")
+                        results.flatMap { $0.segments }
+                            .filter { Self.isSpeechSegment($0, vad: sessionVAD, timeOffset: tailOffset) }
+                            .map(\.text).joined(separator: " ")
                     )
                     let prefix = Self.clean(confirmedText)
                     text = [prefix, tailWords].filter { !$0.isEmpty }.joined(separator: " ")
@@ -489,7 +519,14 @@ final class StreamingTranscriber: ObservableObject {
             }
         }
 
-        guard !text.isEmpty, !Self.isLikelySilenceHallucination(text) else { return "" }
+        guard !text.isEmpty else { return "" }
+        // Whole-text backstop, session-level: the joined text has no timestamps,
+        // so if the entire transcript is a known silence phrase, keep it only
+        // when the detector heard speech somewhere in the session. (Per-segment
+        // filtering above already did the time-aligned check.)
+        if Self.isLikelySilenceHallucination(text), sessionVAD?.everSpeech != true {
+            return ""
+        }
         return Self.applyReplacements(text, AppSettings.shared.replacements)
     }
 
@@ -520,12 +557,28 @@ final class StreamingTranscriber: ObservableObject {
     }
 
     /// A segment counts as speech only if it isn't flagged no-speech AND isn't a
-    /// known silence hallucination. Whisper often emits "Thank you." on silence
-    /// with a *low* noSpeechProb (a confident hallucination), so the probability
-    /// check alone misses it — reject the phrase by text too.
-    private static func isSpeechSegment(_ seg: TranscriptionSegment) -> Bool {
+    /// silence hallucination. Whisper often emits "Thank you." on silence with a
+    /// *low* noSpeechProb (a confident hallucination), so the probability check
+    /// alone misses it — the text has to be checked too. But a phrase match
+    /// alone no longer condemns the segment: if the acoustic speech detector saw
+    /// speech under the segment's time range, the phrase was really spoken —
+    /// keep it. With no detector evidence (still loading, results lagging,
+    /// genuine silence) the segment is dropped, exactly the old text-only
+    /// behavior. `timeOffset` maps segment-relative times onto the session-audio
+    /// clock (the stop() tail re-decode produces segments timed from the tail's
+    /// start, not the session's).
+    private static func isSpeechSegment(
+        _ seg: TranscriptionSegment,
+        vad: SpeechActivityDetector?,
+        timeOffset: Double = 0
+    ) -> Bool {
         guard seg.noSpeechProb <= noSpeechThreshold else { return false }
-        return !isLikelySilenceHallucination(seg.text)
+        guard HallucinationFilter.isLikelySilenceHallucination(seg.text) else { return true }
+        guard let vad else { return false }
+        return vad.sawSpeech(
+            betweenSeconds: Double(seg.start) + timeOffset,
+            and: Double(seg.end) + timeOffset
+        )
     }
 
     /// Applies user replacements (heard → corrected), case-insensitively.
@@ -562,7 +615,7 @@ final class StreamingTranscriber: ObservableObject {
     /// fails open (never drops speech) until it's ready, so building it
     /// asynchronously is free and removes the stall.
     private func startVAD() {
-        vad = nil
+        vadHandle.detector = nil
         vadSessionToken &+= 1
         let token = vadSessionToken
         Task.detached(priority: .utility) { [weak self] in
@@ -575,12 +628,12 @@ final class StreamingTranscriber: ObservableObject {
     /// stopped while it was loading (token mismatch → discard).
     private func adoptVAD(_ detector: SpeechActivityDetector?, token: Int) {
         guard token == vadSessionToken else { return }
-        vad = detector
+        vadHandle.detector = detector
     }
 
     /// Tears down the detector and invalidates any in-flight async build.
     private func clearVAD() {
-        vad = nil
+        vadHandle.detector = nil
         vadSessionToken &+= 1
     }
 
