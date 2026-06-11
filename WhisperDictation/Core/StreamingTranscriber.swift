@@ -464,6 +464,37 @@ final class StreamingTranscriber: ObservableObject {
                 Log.error("Stream transcription error: \(error.localizedDescription)")
             }
         }
+
+        // Don't return (and let the controller cue "speak now") until the mic is
+        // actually capturing. On the VPIO path a COLD engine takes ~800ms to
+        // converge and deliver its first buffer — speaking into that gap silently
+        // loses the leading word(s). Block here until the first captured buffer
+        // lands, so the caller's "go" chime + .recording state are honest. The
+        // warm-adopt path delivers its first buffer in ~100ms (engine already
+        // flowing), so this is effectively instant there — no regression.
+        // Non-VPIO (Bluetooth) capture starts immediately, so skip the wait.
+        if voiceIsolationActive {
+            await waitForFirstCapturedBuffer(token: token)
+        }
+    }
+
+    /// Polls until the audio processor has delivered its first captured buffer,
+    /// the session is superseded (cancel/Escape/stop bumps `sessionToken`), or a
+    /// safety timeout elapses. Fail-open: if the mic never produces audio (denied
+    /// permission, dead device) we return after the timeout so dictation proceeds
+    /// exactly as before rather than hanging on the "preparing" state forever.
+    private func waitForFirstCapturedBuffer(token: Int) async {
+        let pollNs: UInt64 = 20_000_000          // 20ms
+        let maxPolls = 100                        // ~2s safety backstop
+        for _ in 0..<maxPolls {
+            guard token == sessionToken else { return }       // superseded → bail
+            if !(whisperKit?.audioProcessor.audioSamples.isEmpty ?? true) {
+                Log.info("Mic live — first buffer captured.")
+                return
+            }
+            try? await Task.sleep(nanoseconds: pollNs)
+        }
+        Log.info("Mic-warmup wait timed out (~2s) — proceeding without first-buffer confirmation.")
     }
 
     /// Stops streaming and returns the cleaned final transcript.

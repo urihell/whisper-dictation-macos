@@ -144,16 +144,25 @@ final class DictationController: ObservableObject {
         // stops, per the user's setting. (The actual warm engine, if any, is
         // adopted instantly inside start() → startRecordingLive.)
         transcriber.setKeepWarm(AppSettings.shared.micWarmUp != .off)
-        SoundFeedback.start()
+        // HUD shows "preparing…" immediately for visual feedback, but the audio
+        // "go" cue is held until the mic is actually capturing (see below) — on a
+        // cold VPIO start the engine takes ~800ms to converge, and chiming "speak
+        // now" before then loses the leading word into the dead-zone.
         setState(.preparing)
         OverlayController.shared.show()
         startSessionKeys()
         Task {
             do {
                 try await transcriber.start(language: AppSettings.shared.forcedLanguageCode)
-                // If the user already released (push-to-talk) we may have been
-                // moved out of .preparing; only advance if still preparing.
-                if state == .preparing { setState(.recording) }
+                // transcriber.start() only returns once the mic has delivered its
+                // first captured buffer (or timed out), so now the "go" cue is
+                // honest. If the user already released (push-to-talk) we may have
+                // been moved out of .preparing; only advance + chime if still
+                // preparing.
+                if state == .preparing {
+                    SoundFeedback.start()
+                    setState(.recording)
+                }
                 Log.info("begin() — now \(String(describing: state))")
             } catch {
                 OverlayController.shared.hide()
