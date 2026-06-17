@@ -231,6 +231,19 @@ final class DictationController: ObservableObject {
                 OverlayController.shared.toast(
                     "🎤 No audio detected — check your microphone"
                 )
+            } else if wasRecording, transcriber.lastSessionSuppressedNonSpeech {
+                // Audio flowed but the detector heard no speech — almost always the
+                // wrong input is selected (e.g. AirPods that only picked up music
+                // while you spoke at the Mac). Name the mic so the fix is obvious.
+                if let mic = transcriber.activeInputDeviceName {
+                    OverlayController.shared.toast(
+                        "🎤 No speech detected on “\(mic)” — switch your microphone"
+                    )
+                } else {
+                    OverlayController.shared.toast(
+                        "🎤 No speech detected — check your microphone selection"
+                    )
+                }
             }
             setState(.idle)
             return

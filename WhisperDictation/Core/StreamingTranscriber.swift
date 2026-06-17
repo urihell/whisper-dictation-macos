@@ -111,6 +111,13 @@ final class StreamingTranscriber: ObservableObject {
     /// inserting nothing. Set in stop(); read by the controller right after.
     /// Defaults true so a session that never ran can't trigger a spurious warning.
     private(set) var lastSessionCapturedAudio = true
+    /// Whether the just-ended session captured audio that the speech detector was
+    /// confident contained NO speech — e.g. recording the wrong input (AirPods that
+    /// only heard music) while another path was intended. Distinct from
+    /// `lastSessionCapturedAudio` (audio arrived) and from a quick genuinely-silent
+    /// tap (VAD fails open with too few results, so this stays false). Lets the
+    /// controller name the active mic instead of failing silently. Set in stop().
+    private(set) var lastSessionSuppressedNonSpeech = false
 
     // Speech-activity detection (SoundAnalysis) used to suppress silent sessions
     // and to confirm that hallucination-phrase suspects (a lone "Thank you")
@@ -342,6 +349,19 @@ final class StreamingTranscriber: ObservableObject {
         return engage
     }
 
+    /// The human-readable name of the input device a session would actually
+    /// capture from: the user's explicit selection if connected, otherwise the
+    /// live system default. Used to name the mic in the wrong-input warning.
+    var activeInputDeviceName: String? {
+        let uid = AppSettings.shared.audioInputDeviceUID
+        if !uid.isEmpty,
+           let id = SelectableInputAudioProcessor.deviceID(forUID: uid),
+           let name = SelectableInputAudioProcessor.deviceName(forID: id) {
+            return name
+        }
+        return SelectableInputAudioProcessor.defaultInputDeviceName()
+    }
+
     /// Whether a VPIO engine is currently held warm between sessions.
     var isMicWarm: Bool {
         (whisperKit?.audioProcessor as? SelectableInputAudioProcessor)?.isWarmIdle ?? false
@@ -567,6 +587,11 @@ final class StreamingTranscriber: ObservableObject {
         audioLevel = 0
         voiceIsolationActive = false
         let suppress = vadSuppresses
+        // A session that captured audio but was confidently classified as no-speech
+        // (suppressed) usually means we recorded the wrong input — e.g. AirPods that
+        // only heard music while you spoke into the built-in mic. Record it so the
+        // controller can name the active device instead of dropping the text silently.
+        lastSessionSuppressedNonSpeech = suppress
         // Keep this session's detector alive past clearVAD(): the tail re-decode
         // and the final hallucination backstop below still consult its recorded
         // speech windows.
@@ -663,9 +688,15 @@ final class StreamingTranscriber: ObservableObject {
         guard seg.noSpeechProb <= noSpeechThreshold else { return false }
         guard HallucinationFilter.isLikelySilenceHallucination(seg.text) else { return true }
         guard let vad else { return false }
+        // Tight tolerance for a hallucination suspect. sawSpeech defaults to a 0.5s
+        // pad on each side to forgive segment-edge timing slop — but for a suspect
+        // that pad lets a PRECEDING real-speech window bridge into the silent tail
+        // and vouch for a hallucinated trailing "Thank you." Require the detector to
+        // have heard speech genuinely UNDER the suspect's own time range.
         return vad.sawSpeech(
             betweenSeconds: Double(seg.start) + timeOffset,
-            and: Double(seg.end) + timeOffset
+            and: Double(seg.end) + timeOffset,
+            tolerance: 0.15
         )
     }
 
