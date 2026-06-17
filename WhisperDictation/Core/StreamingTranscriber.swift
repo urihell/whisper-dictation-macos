@@ -344,9 +344,51 @@ final class StreamingTranscriber: ObservableObject {
             Log.info("Selected input device not connected; using system default.")
         }
         proc.selectedDeviceID = device
-        let engage = SelectableInputAudioProcessor.shouldEngageVoiceProcessing(forInputDevice: device)
+        lastResolvedDevice = device
+        var engage = SelectableInputAudioProcessor.shouldEngageVoiceProcessing(forInputDevice: device)
+        // Skip VPIO if it failed to start for this device recently. While another
+        // app owns the audio HAL (e.g. AirPods playing music), Apple's Voice
+        // Processing unit can't initialize (-10875) and we'd re-attempt — and eat
+        // its ~2s first-buffer timeout — on every dictation. The cooldown routes
+        // straight to plain capture (instant start) until the device changes or the
+        // window elapses, after which VPIO is tried again automatically.
+        if engage, isVPIOInCooldown(for: device) {
+            Log.info("Voice processing skipped — cooldown active after a recent init failure for this device.")
+            engage = false
+        }
         proc.voiceIsolationEnabled = engage
         return engage
+    }
+
+    // MARK: - VPIO failure cooldown
+
+    /// The device resolved for the current/last session (nil = system default),
+    /// captured so a VPIO failure can be attributed to the right device.
+    private var lastResolvedDevice: DeviceID?
+    /// When the active VPIO cooldown expires, or nil if none.
+    private var vpioCooldownUntil: Date?
+    /// The device the cooldown applies to (so switching mics retries VPIO at once).
+    private var vpioCooldownDevice: DeviceID?
+    /// How long to skip VPIO after an init failure before retrying.
+    private static let vpioCooldownWindow: TimeInterval = 30
+
+    /// Whether VPIO is in cooldown for `device` right now. Self-expiring.
+    private func isVPIOInCooldown(for device: DeviceID?) -> Bool {
+        guard let until = vpioCooldownUntil else { return false }
+        if Date() >= until {
+            vpioCooldownUntil = nil
+            vpioCooldownDevice = nil
+            return false
+        }
+        return vpioCooldownDevice == device
+    }
+
+    /// Start (or extend) the VPIO cooldown for `device` after an init failure.
+    private func armVPIOCooldown(for device: DeviceID?) {
+        guard vpioCooldownUntil == nil || vpioCooldownDevice != device else { return }
+        vpioCooldownDevice = device
+        vpioCooldownUntil = Date().addingTimeInterval(Self.vpioCooldownWindow)
+        Log.info("Voice processing entering \(Int(Self.vpioCooldownWindow))s cooldown after init failure.")
     }
 
     /// The human-readable name of the input device a session would actually
@@ -458,6 +500,10 @@ final class StreamingTranscriber: ObservableObject {
         guard !gotAudio, token == sessionToken,
               let proc = whisperKit.audioProcessor as? SelectableInputAudioProcessor else { return }
         Log.info("VPIO produced no audio — falling back to plain capture for this session.")
+        // VPIO came up but delivered no frames (HAL owned by another app, e.g.
+        // AirPods playing music). Arm the cooldown so following dictations skip
+        // straight to plain capture instead of re-paying this ~2s timeout.
+        armVPIOCooldown(for: lastResolvedDevice)
         // Tear down the dead streamer + VPIO engine before relaunching.
         if let dead = streamer { streamer = nil; await dead.stopStreamTranscription() }
         streamTask?.cancel(); streamTask = nil
