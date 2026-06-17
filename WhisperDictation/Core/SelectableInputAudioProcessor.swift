@@ -506,6 +506,18 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
         return deviceID
     }
 
+    /// The display name of a device by its runtime ID (owned Swift `String`), or nil.
+    /// Public wrapper over the internal name reader for the wrong-input warning.
+    static func deviceName(forID deviceID: DeviceID) -> String? {
+        deviceName(for: deviceID)
+    }
+
+    /// The display name of the current system default input device, or nil.
+    static func defaultInputDeviceName() -> String? {
+        guard let id = defaultInputDeviceID() else { return nil }
+        return deviceName(for: id)
+    }
+
     /// The current system default input device, or nil if it can't be read.
     private static func defaultInputDeviceID() -> DeviceID? {
         var addr = AudioObjectPropertyAddress(
