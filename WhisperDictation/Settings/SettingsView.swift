@@ -7,10 +7,9 @@ import WhisperKit
 struct SettingsView: View {
     /// An input device row for the picker, identified by its persistent Core
     /// Audio UID (stable across reboots, unlike the runtime `AudioDeviceID`).
-    private struct AudioInputDevice: Identifiable {
-        let id: String
-        let name: String
-    }
+    /// Provided by `SelectableInputAudioProcessor.connectedInputDevices()`, which
+    /// copies UID + name into owned Swift values (no dangling CoreAudio refs).
+    private typealias AudioInputDevice = SelectableInputAudioProcessor.InputDevice
 
     @StateObject private var settings = AppSettings.shared
     @ObservedObject private var transcriber = DictationController.shared.transcriber
@@ -305,10 +304,15 @@ struct SettingsView: View {
     }
 
     private func reloadAudioDevices() {
-        audioDevices = AudioProcessor.getAudioDevices().compactMap { device in
-            SelectableInputAudioProcessor.deviceUID(for: device.id).map {
-                AudioInputDevice(id: $0, name: device.name)
-            }
+        // Enumerate off the current layout/appearance pass. reloadAudioDevices is
+        // driven by `.onAppear`, which SwiftUI runs DURING NSHostingView.layout();
+        // mutating @State synchronously there re-enters the view update and crashed
+        // (objc_retain on a freed object) when the warm VPIO engine's transient
+        // aggregate device churned mid-enumeration. Hopping to the next main-actor
+        // turn lets layout finish first, and connectedInputDevices() returns only
+        // owned Swift values, so nothing dangles.
+        Task { @MainActor in
+            audioDevices = SelectableInputAudioProcessor.connectedInputDevices()
         }
     }
 

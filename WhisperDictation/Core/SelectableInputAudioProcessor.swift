@@ -395,6 +395,77 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
         return !isBluetoothDevice(resolved)
     }
 
+    /// A connected input device: persistent UID + display name, both copied into
+    /// Swift `String`s so nothing references CoreAudio-owned CF storage after the
+    /// call returns. `id` is the UID (stable across reboots / re-plugs).
+    struct InputDevice: Identifiable, Equatable {
+        let id: String
+        let name: String
+    }
+
+    /// Enumerate connected INPUT devices ourselves rather than via WhisperKit's
+    /// `AudioProcessor.getAudioDevices()`.
+    ///
+    /// Why: that helper returned device objects whose name backing could be freed
+    /// mid-use, and calling it while the warm VPIO engine's transient aggregate
+    /// device was being created/torn down crashed in `objc_retain` on a dangling
+    /// object (use-after-free during Settings' device-list build). Here we read
+    /// every property into an owned Swift value immediately — UID and name as
+    /// `String` — and skip devices with no input streams, so the returned array
+    /// holds no live CoreAudio references.
+    static func connectedInputDevices() -> [InputDevice] {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDevices,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var dataSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(
+            AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &dataSize
+        ) == noErr, dataSize > 0 else { return [] }
+
+        let count = Int(dataSize) / MemoryLayout<AudioDeviceID>.size
+        var ids = [AudioDeviceID](repeating: 0, count: count)
+        guard AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &dataSize, &ids
+        ) == noErr else { return [] }
+
+        return ids.compactMap { id -> InputDevice? in
+            guard hasInputStreams(id), let uid = deviceUID(for: id) else { return nil }
+            return InputDevice(id: uid, name: deviceName(for: id) ?? uid)
+        }
+    }
+
+    /// True if the device exposes at least one input stream (i.e. it's a mic, not
+    /// an output-only device). Reads the input-scope stream configuration.
+    private static func hasInputStreams(_ deviceID: DeviceID) -> Bool {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreams,
+            mScope: kAudioObjectPropertyScopeInput,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var size: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(AudioObjectID(deviceID), &addr, 0, nil, &size) == noErr
+        else { return false }
+        return size >= UInt32(MemoryLayout<AudioStreamID>.size)
+    }
+
+    /// The device's human-readable name as an owned Swift `String`, or nil.
+    private static func deviceName(for deviceID: DeviceID) -> String? {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioObjectPropertyName,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var name: CFString?
+        var size = UInt32(MemoryLayout<CFString?>.size)
+        let err = withUnsafeMutablePointer(to: &name) { ptr in
+            AudioObjectGetPropertyData(AudioObjectID(deviceID), &addr, 0, nil, &size, ptr)
+        }
+        guard err == noErr, let name else { return nil }
+        return name as String   // copies into a Swift String; no CF reference retained
+    }
+
     /// The device's persistent UID (`kAudioDevicePropertyDeviceUID`), or nil.
     /// `AudioDeviceID`s are runtime handles that change across reboots and
     /// replugs — the UID is the only identity safe to persist in settings.

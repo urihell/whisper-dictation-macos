@@ -102,6 +102,31 @@
   coreaudio aggregates AND can corrupt the TCC grant. `strings` misses em-dash (—)
   strings; use `strings -a` and grep a plain ASCII substring to verify new code.
 
+## Settings device-list crash while mic warm — use-after-free + .onAppear re-entrancy (2026-06-16)
+- **Symptom:** opening Settings (Audio tab) while the mic was WARM crashed with
+  EXC_BAD_ACCESS in `objc_retain` (addr 0x20). Stack: `SettingsView.reloadAudioDevices()`
+  ← `_AppearanceActionModifier` (.onAppear) ← `NSHostingView.layout()`. App frame
+  present — a REAL app bug, NOT the 2026-06-11 framework-teardown crash (which had
+  zero app frames).
+- **Two compounding causes:**
+  1. **Use-after-free:** `reloadAudioDevices` called WhisperKit's
+     `AudioProcessor.getAudioDevices()`, which returned device objects whose name
+     backing could be freed mid-enumeration. With the mic warm, the VPIO engine
+     holds a transient CoreAudio AGGREGATE device that's created/torn down in the
+     background — enumerating across that churn over-released a device name.
+  2. **Re-entrancy:** `.onAppear` runs DURING `NSHostingView.layout()`; mutating
+     `@State` (`audioDevices = …`) synchronously there re-enters the view update.
+- **Fix:** (a) own the enumeration — added
+  `SelectableInputAudioProcessor.connectedInputDevices()` using CoreAudio HAL
+  (`kAudioHardwarePropertyDevices` + input-scope `kAudioDevicePropertyStreams`
+  filter), copying UID + name into Swift `String`s so NO live CF reference escapes;
+  (b) hop the @State write to the next main turn (`Task { @MainActor }`) so layout
+  finishes first. Verified: no crash opening Settings / Refresh devices while warm.
+- **Lesson:** never mutate SwiftUI @State synchronously inside `.onAppear`/appearance
+  actions (they run mid-layout) — defer one main-actor turn. And when reading
+  CoreAudio device properties, copy CFString → Swift String immediately; don't hold
+  vendor-returned device objects, especially while a VPIO aggregate may be churning.
+
 ## SwiftUI/AttributeGraph teardown crash — investigation (2026-06-11)
 - **Two crashes, NOT identical** (corrected an earlier wrong claim):
   - 6/11: EXC_BAD_ACCESS / SIGSEGV at addr 0xfffffffffffffff0 (-16) on the MAIN
