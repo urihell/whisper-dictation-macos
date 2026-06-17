@@ -181,11 +181,16 @@ final class DictationController: ObservableObject {
     /// setting; otherwise force on/off (used by submit).
     func end(pressReturn: Bool? = nil) async {
         guard state == .preparing || state == .recording else { return }
+        // Capture before the .transcribing transition below: a session that
+        // reached .recording had the mic live, so an empty result there can mean a
+        // dead mic (worth a hint). Ending from .preparing — a fast push-to-talk
+        // release — never had a live mic, so it can't and shouldn't warn.
+        let wasRecording = state == .recording
         // Only cue "stopped" if "go" ever cued: a fast push-to-talk release can
         // end the session from .preparing — before the start chime played (it
         // waits for the mic to be live) — and a lone stop sound there reads as
         // a glitch.
-        if state == .recording { SoundFeedback.stop() }
+        if wasRecording { SoundFeedback.stop() }
         stopSessionKeys()
 
         setState(.transcribing)
@@ -218,6 +223,15 @@ final class DictationController: ObservableObject {
 
         guard !text.isEmpty else {
             Log.info("end() — empty transcript, nothing to insert")
+            // Distinguish a dead/contended mic (delivered no audio at all) from a
+            // genuinely silent session. Only warn when we actually reached
+            // .recording — a fast push-to-talk release from .preparing legitimately
+            // captures almost nothing and shouldn't read as a mic failure.
+            if wasRecording, !transcriber.lastSessionCapturedAudio {
+                OverlayController.shared.toast(
+                    "🎤 No audio detected — check your microphone"
+                )
+            }
             setState(.idle)
             return
         }

@@ -103,6 +103,14 @@ final class StreamingTranscriber: ObservableObject {
     /// Sample count the streaming loop has already decoded (WhisperKit's
     /// lastBufferSize). Audio beyond this is the un-decoded tail at stop.
     private var lastDecodedSamples = 0
+    /// Whether the just-ended session captured any microphone audio. False means
+    /// the mic delivered essentially nothing (dead/contended device, e.g. AirPods
+    /// grabbed by another device) — distinct from capturing silence, where audio
+    /// flows but contains no speech (count stays large, all zero-valued). Lets the
+    /// controller surface a "check your microphone" hint instead of silently
+    /// inserting nothing. Set in stop(); read by the controller right after.
+    /// Defaults true so a session that never ran can't trigger a spurious warning.
+    private(set) var lastSessionCapturedAudio = true
 
     // Speech-activity detection (SoundAnalysis) used to suppress silent sessions
     // and to confirm that hallucination-phrase suspects (a lone "Thank you")
@@ -512,6 +520,10 @@ final class StreamingTranscriber: ObservableObject {
         // Capture the full audio + last-confirmed boundary before teardown.
         let samples = whisperKit?.audioProcessor.audioSamples
         let confirmedEnd = lastConfirmedEnd
+        // A live mic delivers buffers continuously even in silence, so anything
+        // below a fraction of a second of audio means the device never produced
+        // sound (dead/contended mic) rather than the user simply staying quiet.
+        lastSessionCapturedAudio = (samples?.count ?? 0) >= Int(Self.sampleRate * 0.25)
         sessionToken += 1   // supersede any start() still awaiting its model load
         await streamer?.stopStreamTranscription()
         streamTask?.cancel()

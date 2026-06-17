@@ -117,7 +117,19 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
             try inner.startRecordingLive(inputDeviceID: device, callback: callback)
             return
         }
-        try startIsolatedRecording(inputDeviceID: device, callback: callback)
+        do {
+            try startIsolatedRecording(inputDeviceID: device, callback: callback)
+        } catch {
+            // VPIO is an enhancement, not a requirement. Its audio unit can fail
+            // to initialize (observed: kAudioUnitErr_FailedInitialization / -10875
+            // right after switching the input device, while CoreAudio is still
+            // reconfiguring). Don't kill the session — release the half-built
+            // engine and fall back to plain capture so dictation still works.
+            Log.error("Voice Isolation: engine failed to start (\(error)); falling back to plain capture.")
+            teardownIsolationEngine()
+            voiceIsolationEnabled = false   // reflect actual state on stop/resume
+            try inner.startRecordingLive(inputDeviceID: device, callback: callback)
+        }
     }
 
     func startStreamingRecordingLive(inputDeviceID: DeviceID?) -> (AsyncThrowingStream<[Float], Error>, AsyncThrowingStream<[Float], Error>.Continuation) {
@@ -134,7 +146,15 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
             return
         }
         // Our engine is fully torn down on stop, so resume just rebuilds it.
-        try startIsolatedRecording(inputDeviceID: device, callback: callback)
+        do {
+            try startIsolatedRecording(inputDeviceID: device, callback: callback)
+        } catch {
+            // Same VPIO-is-optional fallback as startRecordingLive (see there).
+            Log.error("Voice Isolation: engine failed to resume (\(error)); falling back to plain capture.")
+            teardownIsolationEngine()
+            voiceIsolationEnabled = false
+            try inner.resumeRecordingLive(inputDeviceID: device, callback: callback)
+        }
     }
 
     /// Builds a Voice-Processing capture engine and pumps isolated 16 kHz mono

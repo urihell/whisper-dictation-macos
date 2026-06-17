@@ -43,6 +43,29 @@
   code — no app symbols — NOT caused by the cold-start fix. See full
   investigation below.
 
+## VPIO is optional — never let its init failure kill the session (2026-06-16)
+- **Symptom:** error toast `com.apple.coreaudio.avfaudio error -10875` when starting
+  dictation right after switching the input device (AirPods → built-in mic) while
+  the AirPods were contended by another device (phone playing video).
+- **-10875 = `kAudioUnitErr_FailedInitialization`** (AUComponent.h), NOT a format
+  error (-10868 is FormatNotSupported, -10863 CannotDoInCurrentContext). The VPIO
+  audio unit failed to *initialize* — common while CoreAudio is still reconfiguring
+  after a device switch.
+- **Root cause:** `SelectableInputAudioProcessor.startRecordingLive` (and
+  `resumeRecordingLive`) called `try startIsolatedRecording(...)` with NO fallback.
+  VPIO is only an enhancement (the way macOS Mic-Mode isolation reaches a built-in
+  mic) — `shouldEngageVoiceProcessing` returns true for built-in/wired, false for
+  Bluetooth. When `setVoiceProcessingEnabled(true)` + `engine.start()` threw, the
+  error bubbled startStreamTranscription → streamTask → onStreamError → fail() and
+  killed the session.
+- **Fix:** wrap the isolated-start in do/catch; on failure `teardownIsolationEngine()`,
+  set `voiceIsolationEnabled = false` (so stop/resume reflect real state), and fall
+  back to `inner.startRecordingLive` (plain capture). Dictation degrades gracefully
+  instead of erroring. The code already tolerated VPIO *device-pinning* failing — it
+  just didn't tolerate VPIO *starting* failing.
+- **Lesson:** any optional audio enhancement (VPIO, noise reduction, device pinning)
+  must fail OPEN to the proven plain path, never propagate as a fatal session error.
+
 ## SwiftUI/AttributeGraph teardown crash — investigation (2026-06-11)
 - **Two crashes, NOT identical** (corrected an earlier wrong claim):
   - 6/11: EXC_BAD_ACCESS / SIGSEGV at addr 0xfffffffffffffff0 (-16) on the MAIN
