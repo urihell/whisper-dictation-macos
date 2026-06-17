@@ -114,6 +114,7 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
         // flipped to Bluetooth): discard it and take the plain path.
         if isWarmIdle { teardownIsolationEngine() }
         guard voiceIsolationEnabled else {
+            try Self.assertInputFormatUsable()
             try inner.startRecordingLive(inputDeviceID: device, callback: callback)
             return
         }
@@ -142,6 +143,7 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
     func resumeRecordingLive(inputDeviceID: DeviceID?, callback: (([Float]) -> Void)?) throws {
         let device = inputDeviceID ?? selectedDeviceID
         guard voiceIsolationEnabled else {
+            try Self.assertInputFormatUsable()
             try inner.resumeRecordingLive(inputDeviceID: device, callback: callback)
             return
         }
@@ -347,6 +349,30 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
 
     static func padOrTrimAudio(fromArray audioArray: [Float], startAt startIndex: Int, toLength frameLength: Int, saveSegment: Bool) -> MLMultiArray? {
         AudioProcessor.padOrTrimAudio(fromArray: audioArray, startAt: startIndex, toLength: frameLength, saveSegment: saveSegment)
+    }
+
+    // MARK: - Plain-capture pre-flight
+
+    /// Throw (catchable) if the default input node reports an unusable format.
+    ///
+    /// WhisperKit's plain `AudioProcessor.setupEngine` reads
+    /// `inputNode.outputFormat(forBus: 0)` and immediately installs a tap with it.
+    /// When the microphone is unavailable to this process (denied/broken TCC
+    /// grant, no input device) that format is 0 Hz / 0 channels, and
+    /// `installTapOnBus` raises an Obj-C `NSException`
+    /// (`IsFormatSampleRateAndChannelCountValid`) that a Swift `do/catch` cannot
+    /// intercept — the app hard-terminates. We can't override WhisperKit's engine
+    /// setup, so we pre-flight the very same format on a throwaway engine and turn
+    /// an invalid one into a normal Swift error the caller already handles
+    /// (surfaced via onStreamError → a visible failure, not a crash).
+    private static func assertInputFormatUsable() throws {
+        let probe = AVAudioEngine()
+        let format = probe.inputNode.outputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0 else {
+            throw WhisperError.audioProcessingFailed(
+                "Microphone unavailable — check Microphone access in System Settings → Privacy & Security."
+            )
+        }
     }
 
     // MARK: - Device-aware voice-processing decision

@@ -415,6 +415,49 @@ final class StreamingTranscriber: ObservableObject {
             Log.info("Voice processing \(engage ? "ON (built-in/wired mic)" : "OFF (Bluetooth self-isolates)") for this session.")
         }
 
+        launchStreamer(whisperKit: whisperKit, tokenizer: tokenizer, options: options, token: token)
+
+        // Don't return (and let the controller cue "speak now") until the mic is
+        // actually capturing. On the VPIO path a COLD engine takes ~800ms to
+        // converge and deliver its first buffer — speaking into that gap silently
+        // loses the leading word(s). Block here until the first captured buffer
+        // lands, so the caller's "go" chime + .recording state are honest. The
+        // warm-adopt path delivers its first buffer in ~100ms (engine already
+        // flowing), so this is effectively instant there — no regression.
+        // Non-VPIO (Bluetooth) capture starts immediately, so skip the wait.
+        guard voiceIsolationActive else { return }
+        let gotAudio = await waitForFirstCapturedBuffer(token: token)
+
+        // Self-heal a dead VPIO engine: a stale coreaudio Voice-Processing
+        // aggregate (e.g. left behind after a crash or another app's mic session)
+        // can "start" cleanly yet deliver ZERO frames — capture looks alive but no
+        // buffer ever lands. When the wait times out on the VPIO path, tear that
+        // engine down, disable VPIO for this session, and restart the streamer on
+        // the plain (non-VPIO) capture path, which talks to the device directly.
+        // Guard on the token so a cancel/stop during the wait doesn't reopen the mic.
+        guard !gotAudio, token == sessionToken,
+              let proc = whisperKit.audioProcessor as? SelectableInputAudioProcessor else { return }
+        Log.info("VPIO produced no audio — falling back to plain capture for this session.")
+        // Tear down the dead streamer + VPIO engine before relaunching.
+        if let dead = streamer { streamer = nil; await dead.stopStreamTranscription() }
+        streamTask?.cancel(); streamTask = nil
+        proc.releaseWarmEngine()           // fully release the dead VPIO engine
+        proc.voiceIsolationEnabled = false // plain capture for the relaunch
+        voiceIsolationActive = false
+        whisperKit.audioProcessor.purgeAudioSamples(keepingLast: 0)
+        launchStreamer(whisperKit: whisperKit, tokenizer: tokenizer, options: options, token: token)
+        // Plain capture starts immediately (no VPIO convergence) — no second wait.
+    }
+
+    /// Builds the `AudioStreamTranscriber` and starts its run loop for the current
+    /// session. Factored out so the VPIO-timeout self-heal can relaunch on the
+    /// plain path with identical wiring. Assigns `self.streamer`/`self.streamTask`.
+    private func launchStreamer(
+        whisperKit: WhisperKit,
+        tokenizer: any WhisperTokenizer,
+        options: DecodingOptions,
+        token: Int
+    ) {
         // Captured (strongly) by the stream callback below: the box outlives the
         // session and delivers the late-built detector across threads.
         let vadHandle = self.vadHandle
@@ -468,7 +511,7 @@ final class StreamingTranscriber: ObservableObject {
         }
 
         self.streamer = streamer
-        Log.info("Starting stream transcription (language=\(language ?? "auto"))")
+        Log.info("Starting stream transcription (language=\(sessionLanguage ?? "auto"))")
         streamTask = Task { [weak self] in
             do {
                 try await streamer.startStreamTranscription()
@@ -482,37 +525,29 @@ final class StreamingTranscriber: ObservableObject {
                 self.onStreamError?(error)
             }
         }
-
-        // Don't return (and let the controller cue "speak now") until the mic is
-        // actually capturing. On the VPIO path a COLD engine takes ~800ms to
-        // converge and deliver its first buffer — speaking into that gap silently
-        // loses the leading word(s). Block here until the first captured buffer
-        // lands, so the caller's "go" chime + .recording state are honest. The
-        // warm-adopt path delivers its first buffer in ~100ms (engine already
-        // flowing), so this is effectively instant there — no regression.
-        // Non-VPIO (Bluetooth) capture starts immediately, so skip the wait.
-        if voiceIsolationActive {
-            await waitForFirstCapturedBuffer(token: token)
-        }
     }
 
     /// Polls until the audio processor has delivered its first captured buffer,
     /// the session is superseded (cancel/Escape/stop bumps `sessionToken`), or a
-    /// safety timeout elapses. Fail-open: if the mic never produces audio (denied
-    /// permission, dead device) we return after the timeout so dictation proceeds
-    /// exactly as before rather than hanging on the "preparing" state forever.
-    private func waitForFirstCapturedBuffer(token: Int) async {
+    /// safety timeout elapses. Returns true if a buffer arrived, false on timeout
+    /// or supersede. The caller uses a `false` on the VPIO path to self-heal by
+    /// restarting on plain capture (a stale coreaudio VPIO aggregate can "start"
+    /// cleanly yet deliver no frames). Fail-safe either way: a dead mic no longer
+    /// hangs the "preparing" state forever.
+    @discardableResult
+    private func waitForFirstCapturedBuffer(token: Int) async -> Bool {
         let pollNs: UInt64 = 20_000_000          // 20ms
         let maxPolls = 100                        // ~2s safety backstop
         for _ in 0..<maxPolls {
-            guard token == sessionToken else { return }       // superseded → bail
+            guard token == sessionToken else { return false }  // superseded → bail
             if !(whisperKit?.audioProcessor.audioSamples.isEmpty ?? true) {
                 Log.info("Mic live — first buffer captured.")
-                return
+                return true
             }
             try? await Task.sleep(nanoseconds: pollNs)
         }
-        Log.info("Mic-warmup wait timed out (~2s) — proceeding without first-buffer confirmation.")
+        Log.info("Mic-warmup wait timed out (~2s) — no first buffer captured.")
+        return false
     }
 
     /// Stops streaming and returns the cleaned final transcript.

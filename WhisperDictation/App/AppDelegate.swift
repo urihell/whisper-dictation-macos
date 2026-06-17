@@ -1,9 +1,30 @@
 import AppKit
+import AVFoundation
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Wire the global hotkey handlers.
         HotkeyManager.shared.start()
+
+        // Request microphone access up front. The app records via WhisperKit's
+        // AVAudioEngine, which does NOT itself trigger the TCC prompt — without an
+        // explicit request the grant can land in a broken state where the input
+        // node reports a null (0 Hz / 0 ch) format, which then crashes AVFAudio's
+        // installTapOnBus. Requesting here makes the prompt fire once and keeps the
+        // grant well-defined. Non-blocking; the result only affects whether the
+        // first dictation can capture (the format guard handles a hard "no").
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .audio) { granted in
+                Log.info("Microphone access \(granted ? "granted" : "denied") by user.")
+            }
+        case .denied, .restricted:
+            Log.error("Microphone access is denied — dictation can't capture until it's enabled in System Settings → Privacy & Security → Microphone.")
+        case .authorized:
+            break
+        @unknown default:
+            break
+        }
 
         // Nudge the user toward granting Accessibility access (needed for ⌘V
         // injection). Non-blocking — the system shows its own prompt.

@@ -66,6 +66,42 @@
 - **Lesson:** any optional audio enhancement (VPIO, noise reduction, device pinning)
   must fail OPEN to the proven plain path, never propagate as a fatal session error.
 
+## Reinstall corrupts mic TCC grant → null format → uncatchable crash (2026-06-16)
+- **Symptom chain:** after a reinstall + crash-cycling, every session captured
+  ZERO audio ("No audio detected"), then the VPIO→plain fallback CRASHED with
+  `required condition is false: IsFormatSampleRateAndChannelCountValid(format)`
+  in `AVAudioNode installTapOnBus` (via WhisperKit `AudioProcessor.setupEngine`).
+- **Root cause:** the reinstall (same bundle id, fresh self-signed signature) +
+  hard `kill -9`/crash cycling left the app's **Microphone TCC grant corrupted** —
+  System Settings *showed* it enabled, but the real grant was broken. Proof: a
+  standalone Swift probe got `48000/1` + live audio (peak 0.036) while the APP's
+  input node reported `0 Hz / 0 ch`. `tccutil reset Microphone <bundleid>` cleared
+  it (reported clearing 4 duplicate records — confirming corruption) and a fresh
+  grant fixed capture immediately.
+- **Diagnosis lesson:** when an app gets a null/0 input format but a standalone
+  process gets live audio, it's a per-app TCC grant problem, NOT hardware or
+  coreaudiod. `tccutil reset Microphone com.udabby.WhisperDictation` (no sudo) is
+  the reset; the multi-line "Successfully reset" output = stale duplicate entries.
+- **Two code defects this exposed (both fixed):**
+  1. **Uncatchable crash:** `installTapOnBus` with a 0/0 format raises an Obj-C
+     `NSException` that Swift `do/catch` CANNOT intercept → hard SIGTERM. WhisperKit's
+     `setupEngine` reads `inputNode.outputFormat(forBus:0)` and taps with it, no
+     guard. Can't override it, so **pre-flight the same format on a throwaway
+     `AVAudioEngine` and throw a catchable `WhisperError` first** (`assertInputFormatUsable`).
+     Now surfaces as a toast via onStreamError instead of crashing.
+  2. **No explicit mic request:** the app relied on WhisperKit's AVAudioEngine to
+     implicitly trigger the TCC prompt — it doesn't reliably, which is what left the
+     grant fragile. Fix: `AVCaptureDevice.requestAccess(for: .audio)` at launch in
+     AppDelegate so the prompt fires once and the grant is well-defined.
+- **VPIO-delivers-no-frames self-heal:** a stale coreaudio VPIO aggregate can
+  "start" cleanly yet deliver zero frames. `waitForFirstCapturedBuffer` now returns
+  Bool; on a VPIO-path timeout, tear down the dead engine, disable VPIO, and relaunch
+  the streamer on plain capture within the same session (extracted `launchStreamer`).
+- **Install hygiene lesson:** prefer `osascript -e 'quit app "X"'` over `kill -9` for
+  the running app during dev installs — hard-killing while VPIO is warm leaves stale
+  coreaudio aggregates AND can corrupt the TCC grant. `strings` misses em-dash (—)
+  strings; use `strings -a` and grep a plain ASCII substring to verify new code.
+
 ## SwiftUI/AttributeGraph teardown crash — investigation (2026-06-11)
 - **Two crashes, NOT identical** (corrected an earlier wrong claim):
   - 6/11: EXC_BAD_ACCESS / SIGSEGV at addr 0xfffffffffffffff0 (-16) on the MAIN
