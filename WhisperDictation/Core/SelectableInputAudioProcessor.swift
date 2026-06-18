@@ -114,7 +114,18 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
         // flipped to Bluetooth): discard it and take the plain path.
         if isWarmIdle { teardownIsolationEngine() }
         guard voiceIsolationEnabled else {
-            try Self.assertInputFormatUsable()
+            // Pre-flight the input format to turn a corrupted-TCC 0/0 format into a
+            // catchable error instead of an uncatchable installTap crash — but ONLY
+            // for non-Bluetooth devices. The probe spins up a throwaway AVAudioEngine
+            // and reads its input node, which on a Bluetooth headset (AirPods) forces
+            // the A2DP→HFP profile switch, then discards the engine — so WhisperKit's
+            // real engine then switches the route a SECOND time. That double open
+            // adds ~1s of first-word loss on every Bluetooth dictation. Connected
+            // Bluetooth mics always report a valid format, so the probe buys nothing
+            // there; skip it and let WhisperKit open the route exactly once.
+            if !Self.isResolvedDeviceBluetooth(device) {
+                try Self.assertInputFormatUsable()
+            }
             try inner.startRecordingLive(inputDeviceID: device, callback: callback)
             return
         }
@@ -143,7 +154,11 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
     func resumeRecordingLive(inputDeviceID: DeviceID?, callback: (([Float]) -> Void)?) throws {
         let device = inputDeviceID ?? selectedDeviceID
         guard voiceIsolationEnabled else {
-            try Self.assertInputFormatUsable()
+            // Skip the throwaway-engine probe for Bluetooth — it double-opens the
+            // route and costs ~1s of first-word loss on AirPods. See startRecordingLive.
+            if !Self.isResolvedDeviceBluetooth(device) {
+                try Self.assertInputFormatUsable()
+            }
             try inner.resumeRecordingLive(inputDeviceID: device, callback: callback)
             return
         }
@@ -530,6 +545,16 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
         let err = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size, &dev)
         guard err == noErr, dev != 0 else { return nil }
         return dev
+    }
+
+    /// Whether the device a session will actually capture from is Bluetooth.
+    /// `nil`/0 means "system default" — resolve and inspect the live default,
+    /// mirroring `shouldEngageVoiceProcessing`. Unknown → false (treat as wired,
+    /// so the safety probe still runs).
+    private static func isResolvedDeviceBluetooth(_ deviceID: DeviceID?) -> Bool {
+        let resolved = (deviceID ?? 0) != 0 ? deviceID! : defaultInputDeviceID()
+        guard let resolved else { return false }
+        return isBluetoothDevice(resolved)
     }
 
     /// True if the device's Core Audio transport type is Bluetooth (classic or LE).
