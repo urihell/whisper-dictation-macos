@@ -480,15 +480,21 @@ final class StreamingTranscriber: ObservableObject {
         launchStreamer(whisperKit: whisperKit, tokenizer: tokenizer, options: options, token: token)
 
         // Don't return (and let the controller cue "speak now") until the mic is
-        // actually capturing. On the VPIO path a COLD engine takes ~800ms to
-        // converge and deliver its first buffer — speaking into that gap silently
-        // loses the leading word(s). Block here until the first captured buffer
-        // lands, so the caller's "go" chime + .recording state are honest. The
-        // warm-adopt path delivers its first buffer in ~100ms (engine already
-        // flowing), so this is effectively instant there — no regression.
-        // Non-VPIO (Bluetooth) capture starts immediately, so skip the wait.
-        guard voiceIsolationActive else { return }
+        // actually capturing — speaking into the pre-capture gap silently loses the
+        // leading word(s). Wait on EVERY path:
+        //  - VPIO: a COLD engine takes ~800ms to converge before its first buffer.
+        //  - Bluetooth (AirPods): not instant as once assumed — opening the mic
+        //    forces an A2DP→HFP profile switch that delivers no frames for several
+        //    hundred ms to ~1s, exactly the leading-word loss reported.
+        // Warm-adopt VPIO and an already-HFP Bluetooth mic deliver their first
+        // buffer in ~100ms, so the wait is effectively instant there — no regression.
         let gotAudio = await waitForFirstCapturedBuffer(token: token)
+
+        // The VPIO self-heal below only applies to the VPIO path — on plain/
+        // Bluetooth capture there's no VPIO engine to tear down and nothing to fall
+        // back to. A timeout there just means a slow/contended mic; proceed (the
+        // dead-mic warning in end() covers a truly silent device).
+        guard voiceIsolationActive else { return }
 
         // Self-heal a dead VPIO engine: a stale coreaudio Voice-Processing
         // aggregate (e.g. left behind after a crash or another app's mic session)
