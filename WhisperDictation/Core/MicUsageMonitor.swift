@@ -86,8 +86,18 @@ final class MicUsageMonitor {
     /// audio daemon rather than our app, so we must not count it as "another app".
     private lazy var coreAudiodPID: pid_t = Self.pidOfProcess(named: "coreaudiod")
 
+    /// PID of `corespeechd`, resolved once. Enabling Voice Processing (VPIO) on our
+    /// own engine spins up Apple's CoreSpeech daemon as part of the input pipeline,
+    /// so it reports `IsRunningInput` for the entire lifetime of OUR warm engine
+    /// (verified: present during our recording and warm idle, absent when we're
+    /// fully released, with no other app on the mic). Counting it as "another app"
+    /// makes the monitor self-trigger and tear the warm engine down ~0.3s after
+    /// every session — defeating warm-up entirely. Exclude it like coreaudiod.
+    private lazy var coreSpeechdPID: pid_t = Self.pidOfProcess(named: "corespeechd")
+
     /// True if a real, foreign user app currently has the mic input running.
-    /// We require a valid PID that is neither ours nor coreaudiod's — an
+    /// We require a valid PID that is neither ours nor a system audio/speech daemon
+    /// that surfaces our OWN VPIO I/O (coreaudiod, corespeechd) — an
     /// unresolvable/system PID is treated as "not another app" so the warm window
     /// isn't defeated by our own VPIO engine or transient audio objects.
     @available(macOS 14.4, *)
@@ -95,9 +105,11 @@ final class MicUsageMonitor {
         for processObject in processObjectIDs() {
             guard processIsRunningInput(processObject) else { continue }
             let pid = processPID(processObject)
-            // A real, foreign user of the mic: valid PID, not ours, not the audio
-            // daemon (which can surface our own VPIO I/O under its PID).
-            if pid > 0, pid != myPID, pid != coreAudiodPID { return true }
+            // A real, foreign user of the mic: valid PID, not ours, not a system
+            // daemon that surfaces our own VPIO I/O under its PID.
+            if pid > 0, pid != myPID, pid != coreAudiodPID, pid != coreSpeechdPID {
+                return true
+            }
         }
         return false
     }
