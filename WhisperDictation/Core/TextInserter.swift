@@ -52,7 +52,10 @@ final class TextInserter {
         }
 
         let pasteboard = NSPasteboard.general
-        let saved = restoreClipboard ? pasteboard.string(forType: .string) : nil
+        // Snapshot EVERY item with all its representations — not just the plain
+        // string. Restoring only text would destroy an image, file reference, or
+        // rich-text clipboard the user had before dictating.
+        let saved = restoreClipboard ? Self.snapshotItems(of: pasteboard) : nil
 
         // Declare the concealed/transient markers alongside the string so
         // clipboard-history tools don't archive the dictated text. declareTypes
@@ -78,11 +81,29 @@ final class TextInserter {
             if restoreClipboard {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                     pasteboard.clearContents()
-                    if let saved {
-                        pasteboard.setString(saved, forType: .string)
+                    if let saved, !saved.isEmpty {
+                        pasteboard.writeObjects(saved)
                     }
                 }
             }
+        }
+    }
+
+    /// Deep-copies the pasteboard's current items so they can be written back
+    /// after the paste. Items must be copied — an `NSPasteboardItem` still
+    /// attached to the pasteboard can't be re-written once `declareTypes`/
+    /// `clearContents` invalidates it.
+    private static func snapshotItems(of pasteboard: NSPasteboard) -> [NSPasteboardItem] {
+        (pasteboard.pasteboardItems ?? []).compactMap { item in
+            let copy = NSPasteboardItem()
+            var copiedAny = false
+            for type in item.types {
+                if let data = item.data(forType: type) {
+                    copy.setData(data, forType: type)
+                    copiedAny = true
+                }
+            }
+            return copiedAny ? copy : nil
         }
     }
 

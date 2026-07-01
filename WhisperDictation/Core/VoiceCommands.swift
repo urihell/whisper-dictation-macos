@@ -10,11 +10,36 @@ import Foundation
 ///    "the Jurassic period" becomes "the Jurassic." The Settings toggle disables
 ///    the whole feature for anyone who doesn't want command interpretation.
 enum VoiceCommands {
-    /// Breaks replace the surrounding gap entirely (whitespace consumed both sides).
+    /// Breaks replace the surrounding gap entirely (whitespace consumed both
+    /// sides). Localized for every language offered in Settings (en/es/he/fr/
+    /// de/pt/zh) — always all active, matching how the hallucination filter
+    /// works, since auto-detect sessions have no fixed language. Paragraph
+    /// rules precede line rules per language so the longer command wins.
     private static let breakRules: [(String, String)] = [
+        // English
         ("\\s*\\bnew[\\s-]+paragraphs?\\b[.,!?]*\\s*", "\n\n"),
         ("\\s*\\bnew[\\s-]+lines?\\b[.,!?]*\\s*", "\n"),
         ("\\s*\\bnewlines?\\b[.,!?]*\\s*", "\n"),
+        // Spanish ([áa]: Whisper sometimes drops accents)
+        ("\\s*\\bnuevo[\\s-]+p[áa]rrafo\\b[.,!?]*\\s*", "\n\n"),
+        ("\\s*\\bnueva[\\s-]+l[íi]nea\\b[.,!?]*\\s*", "\n"),
+        // French
+        ("\\s*\\bnouveau[\\s-]+paragraphe\\b[.,!?]*\\s*", "\n\n"),
+        ("\\s*\\bnouvelle[\\s-]+ligne\\b[.,!?]*\\s*", "\n"),
+        ("\\s*\\b[àa] la ligne\\b[.,!?]*\\s*", "\n"),
+        // German
+        ("\\s*\\bneuer[\\s-]+absatz\\b[.,!?]*\\s*", "\n\n"),
+        ("\\s*\\bneue[\\s-]+zeile\\b[.,!?]*\\s*", "\n"),
+        // Portuguese
+        ("\\s*\\bnovo[\\s-]+par[áa]grafo\\b[.,!?]*\\s*", "\n\n"),
+        ("\\s*\\bnova[\\s-]+linha\\b[.,!?]*\\s*", "\n"),
+        // Hebrew
+        ("\\s*\\bפסקה חדשה\\b[.,!?]*\\s*", "\n\n"),
+        ("\\s*\\bשורה חדשה\\b[.,!?]*\\s*", "\n"),
+        // Chinese (simplified + traditional; no \b — CJK runs have no word
+        // boundaries between ideographs, so boundary anchors would never match)
+        ("\\s*新段落[.,!?，。！？]*\\s*", "\n\n"),
+        ("\\s*[换換]行[.,!?，。！？]*\\s*", "\n"),
     ]
 
     /// A hyphen joins words: no space on either side.

@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The project weak-links FoundationModels (macOS 26 SDK), so build with
+      # the newest Xcode on the runner rather than the image default.
+      - name: Select latest Xcode
+        run: sudo xcode-select -s "$(ls -d /Applications/Xcode*.app | sort -V | tail -n 1)/Contents/Developer"
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      # CODE_SIGNING_ALLOWED=NO: the app target pins a local self-signed
+      # identity ("WhisperDictation Dev") that doesn't exist on CI runners.
+      - name: Build app
+        run: >
+          xcodebuild build
+          -project WhisperDictation.xcodeproj
+          -scheme WhisperDictation
+          -destination platform=macOS
+          CODE_SIGNING_ALLOWED=NO
+
+      - name: Run tests
+        run: >
+          xcodebuild test
+          -project WhisperDictation.xcodeproj
+          -scheme WhisperDictation
+          -destination platform=macOS
+          CODE_SIGNING_ALLOWED=NO

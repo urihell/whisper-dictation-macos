@@ -158,6 +158,11 @@ final class DictationController: ObservableObject {
         setState(.preparing)
         OverlayController.shared.show()
         startSessionKeys()
+        // Start loading the on-device cleanup model now, while the user speaks,
+        // so end() doesn't pay its cold start. Returns immediately.
+        if AppSettings.shared.cleanupEnabled, SpeechCleaner.isAvailable {
+            SpeechCleaner.prewarm()
+        }
         Task {
             do {
                 try await transcriber.start(language: AppSettings.shared.forcedLanguageCode)

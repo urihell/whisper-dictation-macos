@@ -76,6 +76,17 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
     /// non-VPIO (Bluetooth) path.
     var keepWarmOnStop = false
 
+    /// The complete session audio, snapshotted inside `stopRecording()` at the
+    /// instant capture ended — BEFORE `enterWarmIdle()` clears the live buffers.
+    /// The transcriber reads this after stopping the stream so its tail re-decode
+    /// includes every captured sample; reading `audioSamples` after stop would
+    /// find them already wiped on the warm-idle path. Cleared at session start.
+    private var _samplesAtStop: ContiguousArray<Float>?
+    var samplesAtStop: ContiguousArray<Float>? {
+        bufferLock.lock(); defer { bufferLock.unlock() }
+        return _samplesAtStop
+    }
+
     // MARK: - Device injection / Voice-Isolation capture
 
     /// Open the Voice-Processing capture engine NOW — before a session exists — so
@@ -100,6 +111,7 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
 
     func startRecordingLive(inputDeviceID: DeviceID?, callback: (([Float]) -> Void)?) throws {
         let device = inputDeviceID ?? selectedDeviceID
+        clearStopSnapshot()
         // Adopt a warm-idle engine: just attach the streamer's callback and keep
         // the already-converged, flowing engine. Only valid if this session also
         // wants VPIO (both warm-idle and session use the built-in/wired path).
@@ -153,6 +165,7 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
 
     func resumeRecordingLive(inputDeviceID: DeviceID?, callback: (([Float]) -> Void)?) throws {
         let device = inputDeviceID ?? selectedDeviceID
+        clearStopSnapshot()
         guard voiceIsolationEnabled else {
             // Skip the throwaway-engine probe for Bluetooth — it double-opens the
             // route and costs ~1s of first-word loss on AirPods. See startRecordingLive.
@@ -339,6 +352,11 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
         if isolationEngine != nil { isolationEngine?.pause() } else { inner.pauseRecording() }
     }
     func stopRecording() {
+        // Snapshot the full session audio at the instant capture ends, before any
+        // path below can clear the live buffers (enterWarmIdle wipes them).
+        bufferLock.lock()
+        _samplesAtStop = inner.audioSamples
+        bufferLock.unlock()
         guard isolationEngine != nil else { inner.stopRecording(); return }
         // Keep the engine flowing between sessions when warm-up is enabled, so the
         // next dictation skips VPIO's ~800ms cold start. Otherwise fully release.
@@ -347,6 +365,12 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
         } else {
             teardownIsolationEngine()
         }
+    }
+
+    private func clearStopSnapshot() {
+        bufferLock.lock()
+        _samplesAtStop = nil
+        bufferLock.unlock()
     }
     func padOrTrim(fromArray audioArray: [Float], startAt startIndex: Int, toLength frameLength: Int) -> (any AudioProcessorOutputType)? {
         inner.padOrTrim(fromArray: audioArray, startAt: startIndex, toLength: frameLength)

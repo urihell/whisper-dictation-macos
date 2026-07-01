@@ -624,15 +624,21 @@ final class StreamingTranscriber: ObservableObject {
 
     /// Stops streaming and returns the cleaned final transcript.
     func stop() async -> String {
-        // Capture the full audio + last-confirmed boundary before teardown.
-        let samples = whisperKit?.audioProcessor.audioSamples
+        sessionToken += 1   // supersede any start() still awaiting its model load
+        // Stop the stream BEFORE reading the audio: stopRecording() snapshots the
+        // complete session audio the instant capture ends (`samplesAtStop`), so
+        // the tail re-decode below includes the final buffers instead of missing
+        // whatever arrived between an early read and the actual mic stop. The
+        // snapshot is required — on the warm-idle path stopRecording() clears the
+        // live buffers, so reading `audioSamples` after stop would find nothing.
+        await streamer?.stopStreamTranscription()
+        let samples = (whisperKit?.audioProcessor as? SelectableInputAudioProcessor)?.samplesAtStop
+            ?? whisperKit?.audioProcessor.audioSamples
         let confirmedEnd = lastConfirmedEnd
         // A live mic delivers buffers continuously even in silence, so anything
         // below a fraction of a second of audio means the device never produced
         // sound (dead/contended mic) rather than the user simply staying quiet.
         lastSessionCapturedAudio = (samples?.count ?? 0) >= Int(Self.sampleRate * 0.25)
-        sessionToken += 1   // supersede any start() still awaiting its model load
-        await streamer?.stopStreamTranscription()
         streamTask?.cancel()
         streamTask = nil
         streamer = nil
@@ -692,7 +698,7 @@ final class StreamingTranscriber: ObservableObject {
         if Self.isLikelySilenceHallucination(text), sessionVAD?.everSpeech != true {
             return ""
         }
-        return Self.applyReplacements(text, AppSettings.shared.replacements)
+        return ReplacementEngine.apply(text, rules: AppSettings.shared.replacements)
     }
 
     /// Backstop teardown for non-stop() paths (errors, idle transitions): ensure
@@ -750,18 +756,6 @@ final class StreamingTranscriber: ObservableObject {
             and: Double(seg.end) + timeOffset,
             tolerance: 0.15
         )
-    }
-
-    /// Applies user replacements (heard → corrected), case-insensitively.
-    private static func applyReplacements(_ text: String, _ map: [String: String]) -> String {
-        guard !map.isEmpty else { return text }
-        var result = text
-        for (wrong, right) in map where !wrong.isEmpty {
-            result = result.replacingOccurrences(
-                of: wrong, with: right, options: [.caseInsensitive]
-            )
-        }
-        return result
     }
 
     /// Smooths the raw mic level so the meter glides instead of jittering.

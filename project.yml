@@ -35,8 +35,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.udabby.WhisperDictation
         PRODUCT_NAME: WhisperDictation
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        MARKETING_VERSION: "1.8.4"
-        CURRENT_PROJECT_VERSION: "6"
+        MARKETING_VERSION: "1.9.0"
+        CURRENT_PROJECT_VERSION: "7"
         SWIFT_VERSION: "5.0"
         INFOPLIST_FILE: WhisperDictation/Support/Info.plist
         CODE_SIGN_ENTITLEMENTS: WhisperDictation/Support/WhisperDictation.entitlements
@@ -56,3 +56,32 @@ targets:
         # FoundationModels (on-device LLM) is macOS 26+; weak-link so the app
         # still launches on the macOS 14 deployment target. Usage is #available-gated.
         OTHER_LDFLAGS: "$(inherited) -weak_framework FoundationModels"
+
+  WhisperDictationTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - WhisperDictationTests
+      # Logic tests: compile the pure-Swift units directly into the test bundle
+      # instead of hosting inside the app — so tests run headless with no
+      # permission prompts, no WhisperKit dependency, and no signing identity.
+      - WhisperDictation/Core/HallucinationFilter.swift
+      - WhisperDictation/Core/TextFormatter.swift
+      - WhisperDictation/Core/VoiceCommands.swift
+      - WhisperDictation/Core/ReplacementEngine.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.udabby.WhisperDictationTests
+        SWIFT_VERSION: "5.0"
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+
+schemes:
+  WhisperDictation:
+    build:
+      targets:
+        WhisperDictation: all
+    test:
+      targets:
+        - WhisperDictationTests

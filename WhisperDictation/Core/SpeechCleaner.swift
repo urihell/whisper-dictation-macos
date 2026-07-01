@@ -8,9 +8,38 @@ import FoundationModels
 /// filler — while preserving the speaker's words, meaning, and language.
 /// Everything runs on-device. Falls back to the original text on any problem.
 ///
-/// To hide model cold-start latency, call `prewarm()` when dictation begins so
-/// the model is warm by the time `clean(_:)` runs at the end.
+/// To hide model cold-start latency, `prewarm()` is called when dictation
+/// begins (see DictationController.begin), so the model is loading while the
+/// user speaks and `clean(_:)` at the end pays only the generation cost.
 enum SpeechCleaner {
+    #if canImport(FoundationModels)
+    /// A session created (and prewarmed) at dictation start, consumed by the
+    /// next `clean()` call. Consumed — not reused: a `LanguageModelSession`
+    /// accumulates its conversation as context, so carrying one across
+    /// dictations would feed earlier transcripts into later prompts (a privacy
+    /// leak, and a drift risk). Main-actor confined: prewarm() and clean() are
+    /// both called from the dictation controller on the main actor.
+    @available(macOS 26.0, *)
+    @MainActor
+    private enum Prewarmed {
+        static var session: LanguageModelSession?
+    }
+    #endif
+
+    /// Kick off the model load so it happens while the user is speaking.
+    /// Call when a dictation session begins and cleanup is enabled; a cheap
+    /// no-op when the model is unavailable.
+    @MainActor
+    static func prewarm() {
+        #if canImport(FoundationModels)
+        if #available(macOS 26.0, *) {
+            guard SystemLanguageModel.default.isAvailable else { return }
+            let session = LanguageModelSession(instructions: instructions)
+            session.prewarm()
+            Prewarmed.session = session
+        }
+        #endif
+    }
     /// Whether on-device cleanup can run (macOS 26 + Apple Intelligence ready).
     static var isAvailable: Bool {
         #if canImport(FoundationModels)
@@ -43,9 +72,11 @@ enum SpeechCleaner {
     }
 
     /// Returns the cleaned text, or the original on any failure.
-    /// Note: on-device generation has a large fixed per-call latency (~7s on
-    /// current hardware), independent of input size — there is no warmup/caching
-    /// lever to speed it up. Run only when the user opts in.
+    /// Note: on-device generation has a large fixed per-call latency (measured
+    /// ~7s cold on current hardware), largely independent of input size. The
+    /// prewarmed session from `prewarm()` shaves the model-load portion; the
+    /// generation cost remains. Run only when the user opts in.
+    @MainActor
     static func clean(_ text: String, languageHint: String?) async -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return text }
@@ -53,7 +84,14 @@ enum SpeechCleaner {
         #if canImport(FoundationModels)
         if #available(macOS 26.0, *) {
             guard SystemLanguageModel.default.isAvailable else { return text }
-            let session = LanguageModelSession(instructions: instructions)
+            // Use (and consume) the session prewarmed at dictation start, if any.
+            let session: LanguageModelSession
+            if let warmed = Prewarmed.session {
+                Prewarmed.session = nil
+                session = warmed
+            } else {
+                session = LanguageModelSession(instructions: instructions)
+            }
             do {
                 // Greedy = deterministic + fastest. Cap output so a runaway
                 // generation can't stall; generous enough not to truncate.

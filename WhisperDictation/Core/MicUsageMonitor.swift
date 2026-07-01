@@ -29,22 +29,28 @@ final class MicUsageMonitor {
         return false
     }
 
-    private static var processListAddress = AudioObjectPropertyAddress(
-        mSelector: kAudioHardwarePropertyProcessObjectList,
-        mScope: kAudioObjectPropertyScopeGlobal,
-        mElement: kAudioObjectPropertyElementMain
-    )
+    /// Fresh copy per use: the listener/data APIs take a pointer, and a shared
+    /// mutable static passed by `&` is a strict-concurrency violation.
+    private static func processListAddress() -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyProcessObjectList,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+    }
 
     /// Begin watching. Call when the mic enters warm idle. Safe to call twice.
     func start() {
         guard Self.isSupported, !listening else { return }
         let block: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            // Listener may fire on an arbitrary queue — hop to the main actor.
-            Task { @MainActor in self?.evaluate() }
+            // Delivered on DispatchQueue.main (passed below) — that IS the main
+            // actor's executor, so assert the hop instead of re-dispatching.
+            MainActor.assumeIsolated { self?.evaluate() }
         }
+        var addr = Self.processListAddress()
         let status = AudioObjectAddPropertyListenerBlock(
             AudioObjectID(kAudioObjectSystemObject),
-            &Self.processListAddress,
+            &addr,
             DispatchQueue.main,
             block
         )
@@ -60,9 +66,10 @@ final class MicUsageMonitor {
     /// Stop watching. Call when the warm mic is released (or adopted by a session).
     func stop() {
         guard listening, let block = activeBlock else { return }
+        var addr = Self.processListAddress()
         AudioObjectRemovePropertyListenerBlock(
             AudioObjectID(kAudioObjectSystemObject),
-            &Self.processListAddress,
+            &addr,
             DispatchQueue.main,
             block
         )
@@ -82,63 +89,51 @@ final class MicUsageMonitor {
         }
     }
 
-    /// PID of `coreaudiod`, resolved once. VPIO's own I/O can surface under the
-    /// audio daemon rather than our app, so we must not count it as "another app".
-    private lazy var coreAudiodPID: pid_t = Self.pidOfProcess(named: "coreaudiod")
-
-    /// PID of `corespeechd`, resolved once. Enabling Voice Processing (VPIO) on our
-    /// own engine spins up Apple's CoreSpeech daemon as part of the input pipeline,
-    /// so it reports `IsRunningInput` for the entire lifetime of OUR warm engine
-    /// (verified: present during our recording and warm idle, absent when we're
-    /// fully released, with no other app on the mic). Counting it as "another app"
-    /// makes the monitor self-trigger and tear the warm engine down ~0.3s after
-    /// every session — defeating warm-up entirely. Exclude it like coreaudiod.
-    private lazy var coreSpeechdPID: pid_t = Self.pidOfProcess(named: "corespeechd")
+    /// System daemons whose mic I/O is really OUR OWN capture surfacing under a
+    /// different PID, so they must never count as "another app":
+    ///  - `coreaudiod` — the audio HAL daemon; VPIO's aggregate-device I/O can
+    ///    appear under it.
+    ///  - `corespeechd` — enabling Voice Processing on our engine spins up Apple's
+    ///    CoreSpeech daemon for the input pipeline's whole lifetime (verified:
+    ///    present during our recording and warm idle, absent when fully released).
+    ///    Counting it made the monitor self-trigger and tear the warm engine down
+    ///    ~0.3s after every session, defeating warm-up entirely.
+    private static let excludedDaemons: Set<String> = ["coreaudiod", "corespeechd"]
 
     /// True if a real, foreign user app currently has the mic input running.
-    /// We require a valid PID that is neither ours nor a system audio/speech daemon
-    /// that surfaces our OWN VPIO I/O (coreaudiod, corespeechd) — an
-    /// unresolvable/system PID is treated as "not another app" so the warm window
-    /// isn't defeated by our own VPIO engine or transient audio objects.
+    /// A valid PID that is neither ours nor an excluded system daemon counts.
+    /// Daemon identity is checked by executable name, resolved fresh per check —
+    /// a cached PID goes stale when coreaudiod/corespeechd restarts, which would
+    /// silently bring the self-trigger bug back. An unresolvable name is treated
+    /// as "not another app" so a just-exited process can't spuriously release
+    /// the warm mic.
     @available(macOS 14.4, *)
     private func anyOtherProcessUsingInput() -> Bool {
         for processObject in processObjectIDs() {
             guard processIsRunningInput(processObject) else { continue }
             let pid = processPID(processObject)
-            // A real, foreign user of the mic: valid PID, not ours, not a system
-            // daemon that surfaces our own VPIO I/O under its PID.
-            if pid > 0, pid != myPID, pid != coreAudiodPID, pid != coreSpeechdPID {
+            guard pid > 0, pid != myPID else { continue }
+            guard let name = Self.executableName(of: pid) else { continue }
+            if !Self.excludedDaemons.contains(name) {
                 return true
             }
         }
         return false
     }
 
-    /// First PID matching a process name, or -1. Used to resolve coreaudiod.
-    private static func pidOfProcess(named name: String) -> pid_t {
-        var pid: pid_t = -1
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        task.arguments = ["-x", name]
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        do {
-            try task.run()
-            task.waitUntilExit()
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            if let s = String(data: data, encoding: .utf8)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-                .split(separator: "\n").first,
-               let p = pid_t(s) { pid = p }
-        } catch {
-            Log.error("MicUsageMonitor: couldn't resolve \(name) pid: \(error.localizedDescription)")
-        }
-        return pid
+    /// The executable name for a PID via `proc_pidpath` (in-process, no fork),
+    /// or nil if the process is gone or unreadable.
+    private static func executableName(of pid: pid_t) -> String? {
+        var buffer = [CChar](repeating: 0, count: 4 * 1024)
+        let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        guard length > 0 else { return nil }
+        let path = String(cString: buffer)
+        return (path as NSString).lastPathComponent
     }
 
     private func processObjectIDs() -> [AudioObjectID] {
         var size = UInt32(0)
-        var addr = Self.processListAddress
+        var addr = Self.processListAddress()
         guard AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &addr, 0, nil, &size) == noErr,
               size > 0 else { return [] }
         let count = Int(size) / MemoryLayout<AudioObjectID>.size
