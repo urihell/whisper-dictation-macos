@@ -19,9 +19,16 @@ final class DictationController: ObservableObject {
 
     @Published private(set) var state: DictationState = .idle
     @Published var lastError: String?
+    /// Cleaned text streaming out of the model during `.cleaning`, shown live
+    /// in the HUD instead of a static "Cleaning up…". Nil outside cleaning.
+    @Published private(set) var cleaningText: String?
 
     let transcriber = StreamingTranscriber()
     private let inserter = TextInserter()
+    /// Cleans confirmed sentences in the background while the user speaks, so
+    /// stopping only waits on the last sentence or two. Created per session
+    /// when cleanup is enabled; consumed (or cancelled) when it ends.
+    private var incrementalCleaner: IncrementalCleaner?
 
     // Suppresses the "switched" toast for the very first model load at launch.
     private var announcedFirstModel = false
@@ -159,9 +166,19 @@ final class DictationController: ObservableObject {
         OverlayController.shared.show()
         startSessionKeys()
         // Start loading the on-device cleanup model now, while the user speaks,
-        // so end() doesn't pay its cold start. Returns immediately.
+        // so end() doesn't pay its cold start. Returns immediately. The
+        // incremental cleaner then works through confirmed sentences in the
+        // background as they lock, so end() only waits on the tail.
         if AppSettings.shared.cleanupEnabled, SpeechCleaner.isAvailable {
             SpeechCleaner.prewarm()
+            let cleaner = IncrementalCleaner(languageHint: AppSettings.shared.forcedLanguageCode)
+            incrementalCleaner = cleaner
+            transcriber.onConfirmedText = { [weak cleaner] confirmed in
+                cleaner?.ingest(confirmed: confirmed)
+            }
+        } else {
+            incrementalCleaner = nil
+            transcriber.onConfirmedText = nil
         }
         Task {
             do {
@@ -199,6 +216,11 @@ final class DictationController: ObservableObject {
         stopSessionKeys()
 
         setState(.transcribing)
+        // Take ownership of this session's incremental cleaner; a new session
+        // starting later must never reuse it.
+        let cleaner = incrementalCleaner
+        incrementalCleaner = nil
+        transcriber.onConfirmedText = nil
         var text = await transcriber.stop()
         // Log only the length — never the dictated content. The transcript can
         // contain passwords, 2FA codes, or private messages, and the unified log
@@ -206,9 +228,27 @@ final class DictationController: ObservableObject {
         Log.info("end() — raw transcript: \(text.count) chars")
 
         // Optional on-device cleanup (remove self-corrections + filler).
-        if AppSettings.shared.cleanupEnabled, SpeechCleaner.isAvailable, !text.isEmpty {
+        // Short utterances skip the model entirely — its per-call cost is fixed,
+        // and one-liners rarely have anything to clean, so they insert instantly.
+        if AppSettings.shared.cleanupEnabled, SpeechCleaner.isAvailable, !text.isEmpty,
+           text.count >= SpeechCleaner.minCleanupLength {
             setState(.cleaning)
-            text = await SpeechCleaner.clean(text, languageHint: AppSettings.shared.forcedLanguageCode)
+            cleaningText = nil
+            let onPartial: (String) -> Void = { [weak self] partial in
+                self?.cleaningText = partial
+            }
+            if let cleaner {
+                text = await cleaner.finish(finalText: text, onPartial: onPartial)
+            } else {
+                text = await SpeechCleaner.clean(
+                    text,
+                    languageHint: AppSettings.shared.forcedLanguageCode,
+                    onPartial: onPartial
+                )
+            }
+            cleaningText = nil
+        } else {
+            cleaner?.cancel()
         }
 
         // Voice formatting commands ("new line" / "new paragraph") — applied last
@@ -273,9 +313,19 @@ final class DictationController: ObservableObject {
     func cancel() {
         guard state == .preparing || state == .recording else { return }
         Log.info("cancel() — discarding dictation")
+        discardIncrementalCleaner()
         stopSessionKeys()
         OverlayController.shared.hide()
         setState(.idle)
+    }
+
+    /// Drop the session's incremental cleaner and its partial results
+    /// (cancel/error paths — the transcript is being discarded).
+    private func discardIncrementalCleaner() {
+        incrementalCleaner?.cancel()
+        incrementalCleaner = nil
+        transcriber.onConfirmedText = nil
+        cleaningText = nil
     }
 
     // MARK: - In-session keys (Escape = cancel, Return = submit in double-tap mode)
@@ -402,6 +452,7 @@ final class DictationController: ObservableObject {
     }
 
     private func fail(_ error: Error) {
+        discardIncrementalCleaner()
         stopSessionKeys()
         transcriber.forceStop()
         OverlayController.shared.hide()

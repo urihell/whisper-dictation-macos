@@ -71,13 +71,28 @@ enum SpeechCleaner {
         return "Requires macOS 26 or later."
     }
 
+    /// Below this many characters, cleanup isn't worth the model's fixed
+    /// per-call cost: one-liners ("reply yes to that email") rarely contain
+    /// filler or self-corrections, and skipping the call makes them insert
+    /// instantly. Checked by the controller before entering `.cleaning`.
+    static let minCleanupLength = 60
+
     /// Returns the cleaned text, or the original on any failure.
+    ///
+    /// `onPartial` (optional) receives the cumulative cleaned text as the model
+    /// generates it — used to stream the result into the HUD so the wait reads
+    /// as progress instead of a stall. Same total latency either way.
+    ///
     /// Note: on-device generation has a large fixed per-call latency (measured
     /// ~7s cold on current hardware), largely independent of input size. The
     /// prewarmed session from `prewarm()` shaves the model-load portion; the
     /// generation cost remains. Run only when the user opts in.
     @MainActor
-    static func clean(_ text: String, languageHint: String?) async -> String {
+    static func clean(
+        _ text: String,
+        languageHint: String?,
+        onPartial: ((String) -> Void)? = nil
+    ) async -> String {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return text }
 
@@ -106,9 +121,20 @@ enum SpeechCleaner {
                 \"\"\"
                 """
                 let start = Date()
-                let response = try await session.respond(to: prompt, options: options)
+                let raw: String
+                if let onPartial {
+                    // Stream snapshots so the HUD shows the cleaned text forming.
+                    var latest = ""
+                    for try await snapshot in session.streamResponse(to: prompt, options: options) {
+                        latest = snapshot.content
+                        onPartial(latest.trimmingCharacters(in: .whitespacesAndNewlines))
+                    }
+                    raw = latest
+                } else {
+                    raw = try await session.respond(to: prompt, options: options).content
+                }
                 let ms = Int(Date().timeIntervalSince(start) * 1000)
-                let cleaned = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
+                let cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
                 Log.info("SpeechCleaner: respond \(ms)ms")
 
                 // Safety net: if the model emptied the text, or expanded it well

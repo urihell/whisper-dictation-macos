@@ -115,6 +115,11 @@ struct DictationHUD: View {
             }
             return transcriber.isModelLoading ? "Optimizing model… (first run)" : "Starting…"
         case .cleaning:
+            // Streamed cleaned text as the model generates it; placeholder
+            // only until the first tokens land.
+            if let partial = controller.cleaningText, !partial.isEmpty {
+                return partial
+            }
             return "Cleaning up…"
         case .transcribing, .inserting:
             return transcriber.liveText.isEmpty ? "Finishing…" : transcriber.liveText

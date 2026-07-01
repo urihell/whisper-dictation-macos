@@ -4,6 +4,12 @@ import KeyboardShortcuts
 import LaunchAtLogin
 import WhisperKit
 
+extension Notification.Name {
+    /// Posted by the menu's "Settings…" action on every access: the window is
+    /// raised to the front and the tab selection resets to General.
+    static let settingsAccessed = Notification.Name("com.udabby.WhisperDictation.settingsAccessed")
+}
+
 struct SettingsView: View {
     /// An input device row for the picker, identified by its persistent Core
     /// Audio UID (stable across reboots, unlike the runtime `AudioDeviceID`).
@@ -11,8 +17,13 @@ struct SettingsView: View {
     /// copies UID + name into owned Swift values (no dangling CoreAudio refs).
     private typealias AudioInputDevice = SelectableInputAudioProcessor.InputDevice
 
+    private enum Tab: Hashable {
+        case general, model, audio, shortcut, dictionary
+    }
+
     @StateObject private var settings = AppSettings.shared
     @ObservedObject private var transcriber = DictationController.shared.transcriber
+    @State private var selectedTab: Tab = .general
     @State private var models: [String] = []
     @State private var audioDevices: [AudioInputDevice] = []
     @State private var showDeleteError = false
@@ -24,17 +35,22 @@ struct SettingsView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-            TabView {
+            TabView(selection: $selectedTab) {
                 general
                     .tabItem { Label("General", systemImage: "gearshape") }
+                    .tag(Tab.general)
                 model
                     .tabItem { Label("Model", systemImage: "brain") }
+                    .tag(Tab.model)
                 audio
                     .tabItem { Label("Audio", systemImage: "mic") }
+                    .tag(Tab.audio)
                 shortcut
                     .tabItem { Label("Shortcut", systemImage: "keyboard") }
+                    .tag(Tab.shortcut)
                 dictionary
                     .tabItem { Label("Dictionary", systemImage: "character.book.closed") }
+                    .tag(Tab.dictionary)
             }
             .formStyle(.grouped)
             .tint(.brand)
@@ -43,7 +59,16 @@ struct SettingsView: View {
         // This is a menu-bar-only (LSUIElement) app, so it isn't active by
         // default. Without activating, the Settings window can't become key and
         // the shortcut recorder never receives keystrokes.
-        .onAppear { NSApp.activate(ignoringOtherApps: true) }
+        .onAppear {
+            NSApp.activate(ignoringOtherApps: true)
+            selectedTab = .general
+        }
+        // Every menu access lands on the first tab — even when the window was
+        // already open on another tab in the background (onAppear won't re-fire
+        // then; the menu's Settings action posts this instead).
+        .onReceive(NotificationCenter.default.publisher(for: .settingsAccessed)) { _ in
+            selectedTab = .general
+        }
     }
 
     private var header: some View {
@@ -133,7 +158,7 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
-                    Text("Uses Apple's on-device model — fully private, but adds several seconds after you stop (model is slow per call). Best left off unless you need correction cleanup.")
+                    Text("Uses Apple's on-device model — fully private. Long dictations are cleaned in the background while you speak, so only the last sentence or two finishes after you stop; very short dictations skip cleanup and insert instantly.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

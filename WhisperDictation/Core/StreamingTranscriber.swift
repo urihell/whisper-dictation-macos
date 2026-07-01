@@ -75,6 +75,10 @@ final class StreamingTranscriber: ObservableObject {
     /// down visibly instead of leaving a dead "recording" UI. Never fired for
     /// teardown of a superseded session (token-guarded) or plain cancellation.
     var onStreamError: ((Error) -> Void)?
+    /// Called on the main actor whenever the confirmed (locked) transcript
+    /// grows during a session. Feeds the incremental cleanup pipeline — locked
+    /// text can start its LLM cleaning pass while the user is still speaking.
+    var onConfirmedText: ((String) -> Void)?
 
     private var whisperKit: WhisperKit?
     private var loadedModelName: String?
@@ -572,8 +576,10 @@ final class StreamingTranscriber: ObservableObject {
             let decoded = newState.lastBufferSize
             Task { @MainActor [weak self] in
                 guard let self else { return }
+                let confirmedGrew = confirmed != self.confirmedText && !confirmed.isEmpty
                 self.confirmedText = confirmed
                 self.tailText = tail
+                if confirmedGrew { self.onConfirmedText?(confirmed) }
                 self.lastConfirmedEnd = confirmedEnd
                 self.lastDecodedSamples = decoded
                 self.feedVAD()
