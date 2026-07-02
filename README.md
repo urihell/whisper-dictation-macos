@@ -26,6 +26,8 @@ per-use cost.
   finish almost instantly; opt-in, off by default
 - 📋 **Copy Last Transcript** — the menu keeps your most recent dictation (in
   memory only) in case an insertion goes astray
+- ⚡ **Shortcuts & Siri** — Toggle/Start/Stop Dictation actions for the
+  Shortcuts app, Stream Deck, or "Hey Siri, toggle dictation"
 - 🪧 **Menu bar only** — no Dock icon, stays out of the way
 - 🔒 **Fully offline** after the first model download — nothing leaves your Mac
 
