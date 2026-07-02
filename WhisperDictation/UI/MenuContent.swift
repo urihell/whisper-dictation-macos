@@ -15,12 +15,23 @@ struct MenuContent: View {
         }
 
         Text(statusText)
+        // Surface the mic a session would actually capture from — wrong-input
+        // confusion (e.g. AirPods grabbed by the phone) is the top support
+        // issue, and seeing the name here catches it before a lost dictation.
+        if let mic = controller.transcriber.activeInputDeviceName {
+            Text("Mic: \(mic)")
+        }
 
         Divider()
 
         Button(controller.isActive ? "Stop Dictation" : "Start Dictation") {
             controller.toggle()
         }
+
+        Button("Copy Last Transcript") {
+            controller.copyLastTranscript()
+        }
+        .disabled(controller.lastTranscript == nil)
 
         Button("Settings…") {
             showSettings()

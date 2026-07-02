@@ -22,6 +22,11 @@ final class DictationController: ObservableObject {
     /// Cleaned text streaming out of the model during `.cleaning`, shown live
     /// in the HUD instead of a static "Cleaning up…". Nil outside cleaning.
     @Published private(set) var cleaningText: String?
+    /// The most recent final transcript — a recovery net for when insertion
+    /// lands in the wrong window or an app silently drops synthetic input.
+    /// MEMORY ONLY, never persisted or logged: it can contain passwords, 2FA
+    /// codes, or private messages. Surfaced via menu → "Copy Last Transcript".
+    @Published private(set) var lastTranscript: String?
 
     let transcriber = StreamingTranscriber()
     private let inserter = TextInserter()
@@ -294,6 +299,7 @@ final class DictationController: ObservableObject {
             return
         }
 
+        lastTranscript = text
         setState(.inserting)
         inserter.insert(
             text,
@@ -317,6 +323,14 @@ final class DictationController: ObservableObject {
         stopSessionKeys()
         OverlayController.shared.hide()
         setState(.idle)
+    }
+
+    /// Puts the last transcript back on the clipboard (with the concealed
+    /// markers, so clipboard managers don't archive it) for manual pasting.
+    func copyLastTranscript() {
+        guard let text = lastTranscript else { return }
+        TextInserter.copyConcealed(text)
+        OverlayController.shared.toast("Last transcript copied — paste it where you need it")
     }
 
     /// Drop the session's incremental cleaner and its partial results

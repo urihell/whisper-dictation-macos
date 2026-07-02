@@ -16,6 +16,17 @@ final class TextInserter {
     private static let concealedType = NSPasteboard.PasteboardType("org.nspasteboard.ConcealedType")
     private static let transientType = NSPasteboard.PasteboardType("org.nspasteboard.TransientType")
 
+    /// Puts `text` on the clipboard with the concealed/transient markers, so
+    /// clipboard-history tools skip it. Used by "Copy Last Transcript" — the
+    /// transcript gets the same privacy treatment as the paste path.
+    static func copyConcealed(_ text: String) {
+        let pasteboard = NSPasteboard.general
+        pasteboard.declareTypes([.string, concealedType, transientType], owner: nil)
+        pasteboard.setString(text, forType: .string)
+        pasteboard.setData(Data(), forType: concealedType)
+        pasteboard.setData(Data(), forType: transientType)
+    }
+
     /// Returns whether the process is trusted for Accessibility. When `prompt`
     /// is true and untrusted, macOS shows its grant dialog.
     @discardableResult
