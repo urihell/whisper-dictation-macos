@@ -50,7 +50,12 @@ enum VoiceCommands {
     /// Closing punctuation attaches to the previous word: eat the leading space
     /// (and any punctuation Whisper appended to the spoken word), keep the space
     /// that follows. Singular forms only, so plurals like "commas" don't match.
+    /// Localized for every Settings language; within each language, compound
+    /// commands ("punto y coma") precede their prefix word ("punto") so the
+    /// longer command wins. Accent alternates ([óo] etc.) forgive Whisper
+    /// occasionally dropping diacritics.
     private static let punctRules: [(String, String)] = [
+        // English
         ("\\s*\\bfull stop\\b[.,!?]*", "."),
         ("\\s*\\bperiod\\b[.,!?]*", "."),
         ("\\s*\\bcomma\\b[.,!?]*", ","),
@@ -59,6 +64,49 @@ enum VoiceCommands {
         ("\\s*\\bsemicolon\\b[.,!?]*", ";"),
         ("\\s*\\bcolon\\b[.,!?]*", ":"),
         ("\\s*\\bellipsis\\b[.,!?]*", "…"),
+        // Spanish
+        ("\\s*\\bpunto y coma\\b[.,!?]*", ";"),
+        ("\\s*\\bdos puntos\\b[.,!?]*", ":"),
+        ("\\s*\\bsigno de interrogaci[óo]n\\b[.,!?]*", "?"),
+        ("\\s*\\bsigno de exclamaci[óo]n\\b[.,!?]*", "!"),
+        ("\\s*\\bpunto\\b[.,!?]*", "."),
+        ("\\s*\\bcoma\\b[.,!?]*", ","),
+        // French
+        ("\\s*\\bpoint[\\s-]virgule\\b[.,!?]*", ";"),
+        ("\\s*\\bpoint d['’]interrogation\\b[.,!?]*", "?"),
+        ("\\s*\\bpoint d['’]exclamation\\b[.,!?]*", "!"),
+        ("\\s*\\bdeux[\\s-]points\\b[.,!?]*", ":"),
+        ("\\s*\\bpoint\\b[.,!?]*", "."),
+        ("\\s*\\bvirgule\\b[.,!?]*", ","),
+        // German
+        ("\\s*\\bdoppelpunkt\\b[.,!?]*", ":"),
+        ("\\s*\\bsemikolon\\b[.,!?]*", ";"),
+        ("\\s*\\bfragezeichen\\b[.,!?]*", "?"),
+        ("\\s*\\bausrufezeichen\\b[.,!?]*", "!"),
+        ("\\s*\\bpunkt\\b[.,!?]*", "."),
+        ("\\s*\\bkomma\\b[.,!?]*", ","),
+        // Portuguese
+        ("\\s*\\bponto e v[íi]rgula\\b[.,!?]*", ";"),
+        ("\\s*\\bponto de interroga[çc][ãa]o\\b[.,!?]*", "?"),
+        ("\\s*\\bponto de exclama[çc][ãa]o\\b[.,!?]*", "!"),
+        ("\\s*\\bdois pontos\\b[.,!?]*", ":"),
+        ("\\s*\\bponto\\b[.,!?]*", "."),
+        ("\\s*\\bv[íi]rgula\\b[.,!?]*", ","),
+        // Hebrew
+        ("\\s*\\bנקודה ופסיק\\b[.,!?]*", ";"),
+        ("\\s*\\bנקודתיים\\b[.,!?]*", ":"),
+        ("\\s*\\bסימן שאלה\\b[.,!?]*", "?"),
+        ("\\s*\\bסימן קריאה\\b[.,!?]*", "!"),
+        ("\\s*\\bנקודה\\b[.,!?]*", "."),
+        ("\\s*\\bפסיק\\b[.,!?]*", ","),
+        // Chinese (simplified + traditional; full-width output; no \b — CJK
+        // runs have no word boundaries between ideographs)
+        ("\\s*分[号號][.,!?，。！？]*", "；"),
+        ("\\s*冒[号號][.,!?，。！？]*", "："),
+        ("\\s*[问問][号號][.,!?，。！？]*", "？"),
+        ("\\s*感[叹嘆][号號][.,!?，。！？]*", "！"),
+        ("\\s*句[号號][.,!?，。！？]*", "。"),
+        ("\\s*逗[号號][.,!?，。！？]*", "，"),
     ]
 
     static func apply(_ text: String) -> String {
@@ -69,9 +117,9 @@ enum VoiceCommands {
                 options: [.regularExpression, .caseInsensitive]
             )
         }
-        // Tidy: drop any stray space before closing punctuation, collapse runs of
-        // spaces/tabs (but never newlines).
-        s = s.replacingOccurrences(of: "[ \\t]+([,.;:!?…])", with: "$1", options: .regularExpression)
+        // Tidy: drop any stray space before closing punctuation (ASCII and
+        // full-width CJK), collapse runs of spaces/tabs (but never newlines).
+        s = s.replacingOccurrences(of: "[ \\t]+([,.;:!?…，。！？；：])", with: "$1", options: .regularExpression)
         s = s.replacingOccurrences(of: "[ \\t]{2,}", with: " ", options: .regularExpression)
         // Capitalize after spoken "period"/"new paragraph" etc. (shared logic).
         s = TextFormatter.capitalizeSentences(s)

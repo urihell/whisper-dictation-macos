@@ -66,4 +66,41 @@ final class VoiceCommandsTests: XCTestCase {
     func testCapitalizesAfterInsertedSentenceMark() {
         XCTAssertEqual(VoiceCommands.apply("stop period next item"), "Stop. Next item")
     }
+
+    // MARK: - Localized punctuation
+
+    func testSpanishPunctuation() {
+        XCTAssertEqual(VoiceCommands.apply("hola coma mundo punto"), "Hola, mundo.")
+        XCTAssertEqual(VoiceCommands.apply("uno punto y coma dos"), "Uno; dos")
+        XCTAssertEqual(VoiceCommands.apply("nota dos puntos listo"), "Nota: listo")
+    }
+
+    func testFrenchPunctuation() {
+        XCTAssertEqual(VoiceCommands.apply("bonjour virgule monde point"), "Bonjour, monde.")
+        XCTAssertEqual(VoiceCommands.apply("quoi point d'interrogation"), "Quoi?")
+        XCTAssertEqual(VoiceCommands.apply("un point-virgule deux"), "Un; deux")
+    }
+
+    func testGermanPunctuation() {
+        XCTAssertEqual(VoiceCommands.apply("hallo komma welt punkt"), "Hallo, welt.")
+        XCTAssertEqual(VoiceCommands.apply("warum fragezeichen"), "Warum?")
+        XCTAssertEqual(VoiceCommands.apply("liste doppelpunkt eins"), "Liste: eins")
+    }
+
+    func testPortuguesePunctuation() {
+        XCTAssertEqual(VoiceCommands.apply("olá vírgula mundo ponto"), "Olá, mundo.")
+        XCTAssertEqual(VoiceCommands.apply("um ponto e vírgula dois"), "Um; dois")
+    }
+
+    func testHebrewPunctuation() {
+        XCTAssertEqual(VoiceCommands.apply("שלום פסיק עולם נקודה"), "שלום, עולם.")
+        XCTAssertEqual(VoiceCommands.apply("למה סימן שאלה"), "למה?")
+        XCTAssertEqual(VoiceCommands.apply("רשימה נקודתיים אחת"), "רשימה: אחת")
+    }
+
+    func testChinesePunctuation() {
+        XCTAssertEqual(VoiceCommands.apply("你好逗号世界句号"), "你好，世界。")
+        XCTAssertEqual(VoiceCommands.apply("为什么问号"), "为什么？")
+        XCTAssertEqual(VoiceCommands.apply("為什麼問號"), "為什麼？")
+    }
 }

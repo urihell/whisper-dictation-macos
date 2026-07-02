@@ -1,5 +1,7 @@
 # Whisper Dictation
 
+[![CI](https://github.com/urihell/whisper-dictation-macos/actions/workflows/ci.yml/badge.svg)](https://github.com/urihell/whisper-dictation-macos/actions/workflows/ci.yml)
+
 A privacy-first, multilingual voice dictation app for macOS. Press (or hold) a
 hotkey, speak in any language, and the transcribed text is typed at your cursor
 in whatever app is focused. Transcription runs **entirely on-device** with
@@ -15,9 +17,15 @@ per-use cost.
 - ✍️ **Types at the cursor** in any app — synthesized directly, so the text
   **never touches the clipboard** (a clipboard-paste fallback is available)
 - 📖 **Custom vocabulary & replacements** so names, jargon, and acronyms come
-  out right
+  out right (vocabulary biases the final recognition pass at no speed cost)
+- 🗣️ **Spoken punctuation & formatting** — "comma", "period", "new line" and
+  friends, localized for English, Spanish, French, German, Portuguese, Hebrew,
+  and Chinese
 - 🧹 **Optional on-device cleanup** (remove filler & self-corrections) via Apple
-  Intelligence — opt-in, off by default
+  Intelligence — cleans in the background *while you speak*, so long dictations
+  finish almost instantly; opt-in, off by default
+- 📋 **Copy Last Transcript** — the menu keeps your most recent dictation (in
+  memory only) in case an insertion goes astray
 - 🪧 **Menu bar only** — no Dock icon, stays out of the way
 - 🔒 **Fully offline** after the first model download — nothing leaves your Mac
 

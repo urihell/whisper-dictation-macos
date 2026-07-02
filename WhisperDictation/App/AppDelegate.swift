@@ -41,6 +41,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // First-launch intro: a menu-bar app shows nothing on open, so explain
         // where it lives and how to start. Skipped once the user opts out.
         WelcomeController.shared.showIfNeeded()
+
+        // Watch for recurrence of the June 2026 AttributeGraph teardown crash
+        // (tasks/lessons.md): it was left as "monitor" — this automates the
+        // monitoring by flagging any crash report written since the last launch.
+        checkForNewCrashReports()
+    }
+
+    /// Logs (never uploads) any WhisperDictation crash reports newer than the
+    /// previous launch, so a recurrence of the rare teardown crash is noticed
+    /// instead of silently piling up in DiagnosticReports.
+    private func checkForNewCrashReports() {
+        let key = "lastCrashReportScan"
+        let defaults = UserDefaults.standard
+        let since = defaults.object(forKey: key) as? Date ?? Date()
+        defaults.set(Date(), forKey: key)
+        let dir = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Logs/DiagnosticReports", isDirectory: true)
+        guard let items = try? FileManager.default.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.contentModificationDateKey]
+        ) else { return }
+        let fresh = items.filter { url in
+            url.lastPathComponent.hasPrefix("WhisperDictation")
+                && ((try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                    .contentModificationDate ?? .distantPast) > since
+        }
+        if !fresh.isEmpty {
+            Log.error("⚠️ \(fresh.count) new crash report(s) since last launch — check ~/Library/Logs/DiagnosticReports (AttributeGraph watch, lessons.md 2026-06-11).")
+        }
     }
 
     // Re-launching an already-running app (Spotlight, Finder, Launchpad, the

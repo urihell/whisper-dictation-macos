@@ -24,10 +24,12 @@ final class StreamingTranscriber: ObservableObject {
         }
     }
 
-    /// What the HUD shows: confirmed text plus the live tail.
-    @Published private(set) var liveText: String = ""
-    /// Smoothed microphone level (0...1) driving the live HUD meter.
-    @Published private(set) var audioLevel: Float = 0
+    // NOTE: the live transcript and mic level — the HIGH-RATE state — publish
+    // through HUDLiveState (observed only by the always-alive HUD), NOT through
+    // this object. Settings observes this transcriber; keeping 8+/sec updates
+    // out of its objectWillChange avoids constant re-renders and shrinks the
+    // teardown-race surface documented in tasks/lessons.md (June 2026).
+
     /// Whether the active session is capturing through Voice Isolation. Drives
     /// the passive "isolation on" badge in the HUD; set at session start, cleared
     /// on stop.
@@ -47,7 +49,7 @@ final class StreamingTranscriber: ObservableObject {
         liveTextCancellable = liveTextSubject
             .throttle(for: .milliseconds(40), scheduler: DispatchQueue.main, latest: true)
             .removeDuplicates()
-            .sink { [weak self] text in self?.liveText = text }
+            .sink { text in HUDLiveState.shared.liveText = text }
     }
     /// True only while blocking on the very first model load (nothing usable yet).
     @Published private(set) var isModelLoading = false
@@ -237,12 +239,21 @@ final class StreamingTranscriber: ObservableObject {
         return o
     }
 
-    /// Base options plus the user's custom-vocabulary prompt (opt-in; setting
-    /// promptTokens disables WhisperKit's prefill cache, which slows streaming).
-    private func decodeOptions(language: String?, tokenizer: any WhisperTokenizer) -> DecodingOptions {
+    /// Base options, optionally with the user's custom-vocabulary prompt.
+    ///
+    /// Two-tier biasing: setting promptTokens disables WhisperKit's prefill
+    /// cache, which slows STREAMING decodes — so the live stream biases only
+    /// when the user opts in (`vocabularyBiasing`). The one-shot tail re-decode
+    /// at stop() has no cache to lose, so it biases whenever terms exist,
+    /// for free — pass `biasVocabulary: true` there unconditionally.
+    private func decodeOptions(
+        language: String?,
+        tokenizer: any WhisperTokenizer,
+        biasVocabulary: Bool
+    ) -> DecodingOptions {
         var o = Self.baseDecodeOptions(language: language)
         let terms = AppSettings.shared.vocabularyTerms.filter { !$0.isEmpty }
-        if AppSettings.shared.vocabularyBiasing, !terms.isEmpty {
+        if biasVocabulary, !terms.isEmpty {
             var tokens = tokenizer.encode(text: " " + terms.joined(separator: ", "))
             if tokens.count > 200 { tokens = Array(tokens.suffix(200)) }
             o.promptTokens = tokens
@@ -461,13 +472,16 @@ final class StreamingTranscriber: ObservableObject {
         lastShown = ""
         lastConfirmedEnd = 0
         lastDecodedSamples = 0
-        liveText = ""
-        audioLevel = 0
+        HUDLiveState.shared.resetForSession()
         fedSamples = 0
         startVAD()
 
         sessionLanguage = language
-        let options = decodeOptions(language: language, tokenizer: tokenizer)
+        let options = decodeOptions(
+            language: language,
+            tokenizer: tokenizer,
+            biasVocabulary: AppSettings.shared.vocabularyBiasing
+        )
 
         // Apply the user's chosen input device (0 = system default) and decide,
         // per device, whether to engage Apple's Voice Processing I/O. We engage it
@@ -648,7 +662,7 @@ final class StreamingTranscriber: ObservableObject {
         streamTask?.cancel()
         streamTask = nil
         streamer = nil
-        audioLevel = 0
+        HUDLiveState.shared.audioLevel = 0
         voiceIsolationActive = false
         let suppress = vadSuppresses
         // A session that captured audio but was confidently classified as no-speech
@@ -679,7 +693,10 @@ final class StreamingTranscriber: ObservableObject {
             let start = max(0, min(Int(confirmedEnd * Float(Self.sampleRate)), samples.count))
             let tailAudio = Array(samples[start...])
             if tailAudio.count > Int(Self.sampleRate * 0.2) {
-                let opts = decodeOptions(language: sessionLanguage, tokenizer: tokenizer)
+                // Always bias the tail with the vocabulary: this is a single
+                // one-shot decode, so the prefill-cache cost that gates live
+                // biasing doesn't apply here.
+                let opts = decodeOptions(language: sessionLanguage, tokenizer: tokenizer, biasVocabulary: true)
                 if let results = try? await whisperKit.transcribe(audioArray: tailAudio, decodeOptions: opts),
                    !results.isEmpty {
                     // Tail segments are timed from the tail's start — offset
@@ -720,7 +737,7 @@ final class StreamingTranscriber: ObservableObject {
         }
         whisperKit?.audioProcessor.stopRecording()
         clearVAD()
-        audioLevel = 0
+        HUDLiveState.shared.audioLevel = 0
         voiceIsolationActive = false
     }
 
@@ -767,7 +784,8 @@ final class StreamingTranscriber: ObservableObject {
     /// Smooths the raw mic level so the meter glides instead of jittering.
     private func updateLevel(_ raw: Float) {
         let clamped = max(0, min(1, raw))
-        audioLevel = audioLevel * 0.6 + clamped * 0.4
+        let live = HUDLiveState.shared
+        live.audioLevel = live.audioLevel * 0.6 + clamped * 0.4
     }
 
     /// True only when the detector ran long enough to be confident the session

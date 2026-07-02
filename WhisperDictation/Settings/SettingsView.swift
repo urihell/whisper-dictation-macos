@@ -445,8 +445,8 @@ struct SettingsView: View {
                         .buttonStyle(.borderless)
                     }
                 }
-                Toggle("Bias recognition using these terms", isOn: $settings.vocabularyBiasing)
-                Text("When on, seeds the recognizer so these terms are spelled correctly (strong nudge, not a guarantee). ⚠️ Slows live transcription — it disables a speed optimization. Off by default; Replacements below work regardless and cost nothing.")
+                Toggle("Also bias the live preview", isOn: $settings.vocabularyBiasing)
+                Text("These terms are always fed to the final recognition pass — free, so names come out right in the inserted text. Turn this on to bias the live preview too (strong nudge, not a guarantee). ⚠️ Slows live transcription — it disables a speed optimization. Replacements below work regardless and cost nothing.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }

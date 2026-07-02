@@ -4,6 +4,10 @@ import SwiftUI
 struct DictationHUD: View {
     @ObservedObject var transcriber: StreamingTranscriber
     @ObservedObject var controller: DictationController
+    /// High-rate state (live transcript, mic level, streaming cleanup). This
+    /// HUD is the ONLY observer — its panel/hosting view live for the app's
+    /// lifetime, so rapid updates never overlap a view-graph teardown.
+    @ObservedObject private var live = HUDLiveState.shared
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var caretOpacity: Double = 1
 
@@ -84,14 +88,14 @@ struct DictationHUD: View {
                 .symbolEffect(.variableColor.iterative, options: .repeating, isActive: !reduceMotion)
                 .foregroundStyle(Color.brand)
         default:
-            LevelMeter(level: CGFloat(transcriber.audioLevel), reduceMotion: reduceMotion)
+            LevelMeter(level: CGFloat(live.audioLevel), reduceMotion: reduceMotion)
         }
     }
 
     /// A blinking caret follows the live transcript while recording — signals
     /// "still listening / more coming" and that this text will be typed.
     private var showsCaret: Bool {
-        controller.state == .recording && !transcriber.liveText.isEmpty
+        controller.state == .recording && !live.liveText.isEmpty
     }
 
     /// The HUD text, with a brand-tinted caret appended while recording.
@@ -117,14 +121,14 @@ struct DictationHUD: View {
         case .cleaning:
             // Streamed cleaned text as the model generates it; placeholder
             // only until the first tokens land.
-            if let partial = controller.cleaningText, !partial.isEmpty {
+            if let partial = live.cleaningText, !partial.isEmpty {
                 return partial
             }
             return "Cleaning up…"
         case .transcribing, .inserting:
-            return transcriber.liveText.isEmpty ? "Finishing…" : transcriber.liveText
+            return live.liveText.isEmpty ? "Finishing…" : live.liveText
         default:
-            return transcriber.liveText.isEmpty ? "Listening…" : transcriber.liveText
+            return live.liveText.isEmpty ? "Listening…" : live.liveText
         }
     }
 }

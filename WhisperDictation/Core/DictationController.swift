@@ -19,9 +19,10 @@ final class DictationController: ObservableObject {
 
     @Published private(set) var state: DictationState = .idle
     @Published var lastError: String?
-    /// Cleaned text streaming out of the model during `.cleaning`, shown live
-    /// in the HUD instead of a static "Cleaning up…". Nil outside cleaning.
-    @Published private(set) var cleaningText: String?
+    // Streaming cleanup text lives in HUDLiveState (token-rate updates must
+    // not fire this object's objectWillChange — the menu bar dropdown observes
+    // this controller, and its view graph tears down on every close; see
+    // HUDLiveState's doc comment for the teardown-race rationale).
     /// The most recent final transcript — a recovery net for when insertion
     /// lands in the wrong window or an app silently drops synthetic input.
     /// MEMORY ONLY, never persisted or logged: it can contain passwords, 2FA
@@ -238,9 +239,9 @@ final class DictationController: ObservableObject {
         if AppSettings.shared.cleanupEnabled, SpeechCleaner.isAvailable, !text.isEmpty,
            text.count >= SpeechCleaner.minCleanupLength {
             setState(.cleaning)
-            cleaningText = nil
-            let onPartial: (String) -> Void = { [weak self] partial in
-                self?.cleaningText = partial
+            HUDLiveState.shared.cleaningText = nil
+            let onPartial: (String) -> Void = { partial in
+                HUDLiveState.shared.cleaningText = partial
             }
             if let cleaner {
                 text = await cleaner.finish(finalText: text, onPartial: onPartial)
@@ -251,7 +252,7 @@ final class DictationController: ObservableObject {
                     onPartial: onPartial
                 )
             }
-            cleaningText = nil
+            HUDLiveState.shared.cleaningText = nil
         } else {
             cleaner?.cancel()
         }
@@ -339,7 +340,7 @@ final class DictationController: ObservableObject {
         incrementalCleaner?.cancel()
         incrementalCleaner = nil
         transcriber.onConfirmedText = nil
-        cleaningText = nil
+        HUDLiveState.shared.cleaningText = nil
     }
 
     // MARK: - In-session keys (Escape = cancel, Return = submit in double-tap mode)
