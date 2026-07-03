@@ -29,6 +29,33 @@ final class DictationController: ObservableObject {
     /// codes, or private messages. Surfaced via menu → "Copy Last Transcript".
     @Published private(set) var lastTranscript: String?
 
+    /// When set, the active session is CAPTURE-ONLY (Shortcuts "Dictate Text"):
+    /// the final transcript is delivered here instead of being typed at the
+    /// cursor. Resolved exactly once — on end (with the text), or on
+    /// cancel/failure (with "") so the awaiting intent can never hang.
+    private var captureCompletion: ((String) -> Void)?
+
+    /// Runs one dictation session and returns the transcript WITHOUT typing
+    /// it (Shortcuts pipelines). The session behaves normally — HUD, hotkey
+    /// stop, Escape cancel — it just diverts the result. Returns "" if a
+    /// session is already active, or on cancel/failure.
+    func dictateAndReturn() async -> String {
+        guard state == .idle, captureCompletion == nil else { return "" }
+        return await withCheckedContinuation { continuation in
+            captureCompletion = { text in continuation.resume(returning: text) }
+            begin()
+        }
+    }
+
+    /// Resolves a pending capture-only session, if any. Returns true when the
+    /// session was capture-only (the caller should skip insertion).
+    private func resolveCapture(with text: String) -> Bool {
+        guard let capture = captureCompletion else { return false }
+        captureCompletion = nil
+        capture(text)
+        return true
+    }
+
     let transcriber = StreamingTranscriber()
     private let inserter = TextInserter()
     /// Cleans confirmed sentences in the background while the user speaks, so
@@ -274,6 +301,12 @@ final class DictationController: ObservableObject {
 
         guard !text.isEmpty else {
             Log.info("end() — empty transcript, nothing to insert")
+            // A capture-only session must resolve even when empty, or the
+            // awaiting Shortcuts intent would hang.
+            if resolveCapture(with: "") {
+                setState(.idle)
+                return
+            }
             // Distinguish a dead/contended mic (delivered no audio at all) from a
             // genuinely silent session. Only warn when we actually reached
             // .recording — a fast push-to-talk release from .preparing legitimately
@@ -301,6 +334,12 @@ final class DictationController: ObservableObject {
         }
 
         lastTranscript = text
+        // Capture-only session (Shortcuts "Dictate Text"): hand the transcript
+        // to the awaiting intent instead of typing it.
+        if resolveCapture(with: text) {
+            setState(.idle)
+            return
+        }
         setState(.inserting)
         inserter.insert(
             text,
@@ -320,6 +359,7 @@ final class DictationController: ObservableObject {
     func cancel() {
         guard state == .preparing || state == .recording else { return }
         Log.info("cancel() — discarding dictation")
+        _ = resolveCapture(with: "")   // never leave a Shortcuts intent hanging
         discardIncrementalCleaner()
         stopSessionKeys()
         OverlayController.shared.hide()
@@ -467,6 +507,7 @@ final class DictationController: ObservableObject {
     }
 
     private func fail(_ error: Error) {
+        _ = resolveCapture(with: "")   // never leave a Shortcuts intent hanging
         discardIncrementalCleaner()
         stopSessionKeys()
         transcriber.forceStop()

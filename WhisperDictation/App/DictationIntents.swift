@@ -49,6 +49,33 @@ struct StopDictationIntent: AppIntent {
     }
 }
 
+struct DictateTextIntent: AppIntent {
+    static let title: LocalizedStringResource = "Dictate Text"
+    static let description = IntentDescription(
+        "Starts dictation and returns the transcript to the Shortcut instead of typing it — for pipelines like dictate → translate → paste. Stop with your usual trigger (or Escape to cancel, which returns empty text). Note: very long dictations can hit Shortcuts' own action timeout."
+    )
+    static let openAppWhenRun: Bool = false
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ReturnsValue<String> {
+        let text = await DictationController.shared.dictateAndReturn()
+        return .result(value: text)
+    }
+}
+
+struct GetLastTranscriptIntent: AppIntent {
+    static let title: LocalizedStringResource = "Get Last Transcript"
+    static let description = IntentDescription(
+        "Returns the most recent dictation transcript. The transcript is held in memory only and leaves the app solely through explicit calls like this one."
+    )
+    static let openAppWhenRun: Bool = false
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ReturnsValue<String> {
+        .result(value: DictationController.shared.lastTranscript ?? "")
+    }
+}
+
 /// Surfaces "Toggle Dictation" in Spotlight/Siri with zero setup.
 struct WhisperDictationShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {

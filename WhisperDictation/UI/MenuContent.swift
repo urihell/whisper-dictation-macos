@@ -42,6 +42,10 @@ struct MenuContent: View {
             WelcomeController.shared.show()
         }
 
+        Button("Check for Updates…") {
+            UpdateChecker.checkNow()
+        }
+
         Divider()
 
         Button("Quit Whisper Dictation") {
