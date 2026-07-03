@@ -28,5 +28,7 @@
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Whisper Dictation records your speech to transcribe it on-device.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Speech recognition runs fully on-device to transcribe your dictation.</string>
 </dict>
 </plist>

@@ -12,9 +12,10 @@ lessons — read before touching the audio path).
       (1.9.5) — stopgap until Sparkle (blocked on Developer ID).
 - [ ] Per-hotkey forced language (e.g. one key = English, another = Hebrew)
       for deterministic bilingual dictation.
-- [ ] Apple SpeechAnalyzer engine option (macOS 26) — instant start, no
-      model download, lower power; keep Whisper for coverage/accuracy.
-      Big item; touches the audio path (read lessons.md first).
+- [x] Apple SpeechAnalyzer engine option (macOS 26) — shipped in 1.10.0.
+      Opt-in via Settings → Model → Engine; needs a fixed language (auto →
+      Whisper); unsupported languages fall back to Whisper per session.
+      Pairs with the per-hotkey-language item below.
 
 ## Blocked on Apple Developer ID ($99/yr — deliberately deferred)
 - [ ] Developer ID signing + notarization. Ends the Gatekeeper "Open Anyway"

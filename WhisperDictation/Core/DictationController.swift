@@ -58,6 +58,43 @@ final class DictationController: ObservableObject {
 
     let transcriber = StreamingTranscriber()
     private let inserter = TextInserter()
+
+    /// The engine driving the CURRENT session (chosen at begin() from the
+    /// engine setting; may fall back to Whisper mid-begin for an unsupported
+    /// language). All session teardown paths must go through this reference —
+    /// stopping the wrong engine would leave a live mic.
+    private var sessionEngine: (any DictationEngine)?
+
+    /// Lazily-built Apple Speech engine (macOS 26+). Stored type-erased so the
+    /// property itself needs no availability annotation.
+    private var appleEngineStorage: AnyObject?
+    @available(macOS 26.0, *)
+    private var appleEngine: AppleSpeechEngine {
+        if let engine = appleEngineStorage as? AppleSpeechEngine { return engine }
+        let engine = AppleSpeechEngine()
+        engine.onStreamError = { [weak self] error in
+            guard let self, self.isActive else { return }
+            self.fail(error)
+        }
+        appleEngineStorage = engine
+        return engine
+    }
+
+    /// Engine for a NEW session per the setting; Whisper unless Apple Speech
+    /// is selected and the OS has it. Auto-detect ALWAYS routes to Whisper:
+    /// Apple's transcriber is single-language per session, so under "auto" it
+    /// would silently pin to the system language and mangle anything else
+    /// (observed: Hebrew dictated into an English-locked session).
+    private func selectEngine() -> any DictationEngine {
+        if #available(macOS 26.0, *),
+           AppSettings.shared.transcriptionEngine == .apple {
+            if AppSettings.shared.forcedLanguageCode != nil {
+                return appleEngine
+            }
+            Log.info("Language is auto-detect — using Whisper (Apple Speech needs a fixed language).")
+        }
+        return transcriber
+    }
     /// Cleans confirmed sentences in the background while the user speaks, so
     /// stopping only waits on the last sentence or two. Created per session
     /// when cleanup is enabled; consumed (or cancelled) when it ends.
@@ -95,8 +132,19 @@ final class DictationController: ObservableObject {
     }
 
     /// Loads the configured model in the background so it's ready (or compiling)
-    /// before the first dictation. Call once at launch.
+    /// before the first dictation. Call once at launch. Skipped when the Apple
+    /// engine is selected — no point holding a Whisper model in memory; the
+    /// per-language fallback loads it on demand if ever needed.
     func preloadModel() {
+        // Skip only when the Apple engine will actually carry sessions: it
+        // needs a fixed language, so under auto-detect Whisper is the engine
+        // and must preload as usual.
+        if #available(macOS 26.0, *),
+           AppSettings.shared.transcriptionEngine == .apple,
+           AppSettings.shared.forcedLanguageCode != nil {
+            Log.info("Apple engine selected — skipping Whisper model preload (loads on demand for fallback).")
+            return
+        }
         transcriber.requestModel(AppSettings.shared.modelName)
     }
 
@@ -184,12 +232,15 @@ final class DictationController: ObservableObject {
     func begin() {
         guard state == .idle else { return }
         Log.info("begin() — preparing")
+        let engine = selectEngine()
+        sessionEngine = engine
         // A pending warm-window release is now moot — this session will use (and
         // re-arm) the engine. Cancel it so it can't tear the mic down mid-session.
         cancelWarmRelease()
         // Tell the processor whether to keep the engine warm when this session
         // stops, per the user's setting. (The actual warm engine, if any, is
-        // adopted instantly inside start() → startRecordingLive.)
+        // adopted instantly inside start() → startRecordingLive.) Whisper-only;
+        // the Apple engine never warm-idles.
         transcriber.setKeepWarm(AppSettings.shared.micWarmUp != .off)
         // HUD shows "preparing…" immediately for visual feedback, but the audio
         // "go" cue is held until the mic is actually capturing (see below) — on a
@@ -202,33 +253,47 @@ final class DictationController: ObservableObject {
         // so end() doesn't pay its cold start. Returns immediately. The
         // incremental cleaner then works through confirmed sentences in the
         // background as they lock, so end() only waits on the tail.
+        var onConfirmed: ((String) -> Void)?
         if AppSettings.shared.cleanupEnabled, SpeechCleaner.isAvailable {
             SpeechCleaner.prewarm()
             let cleaner = IncrementalCleaner(languageHint: AppSettings.shared.forcedLanguageCode)
             incrementalCleaner = cleaner
-            transcriber.onConfirmedText = { [weak cleaner] confirmed in
+            onConfirmed = { [weak cleaner] confirmed in
                 cleaner?.ingest(confirmed: confirmed)
             }
         } else {
             incrementalCleaner = nil
-            transcriber.onConfirmedText = nil
         }
+        engine.onConfirmedText = onConfirmed
         Task {
             do {
-                try await transcriber.start(language: AppSettings.shared.forcedLanguageCode)
-                // transcriber.start() only returns once the mic has delivered its
-                // first captured buffer (or timed out), so now the "go" cue is
-                // honest. If the user already released (push-to-talk) we may have
-                // been moved out of .preparing; only advance + chime if still
-                // preparing.
-                if state == .preparing {
-                    SoundFeedback.start()
-                    setState(.recording)
+                try await engine.start(language: AppSettings.shared.forcedLanguageCode)
+            } catch let error as AppleSpeechEngineError {
+                // Apple engine can't handle this language on this Mac — fall
+                // back to Whisper transparently for THIS session.
+                Log.info("Apple Speech unavailable (\(error.localizedDescription)) — falling back to Whisper for this session.")
+                OverlayController.shared.toast("Using Whisper for this language")
+                sessionEngine = transcriber
+                transcriber.onConfirmedText = onConfirmed
+                do {
+                    try await transcriber.start(language: AppSettings.shared.forcedLanguageCode)
+                } catch {
+                    fail(error)
+                    return
                 }
-                Log.info("begin() — now \(String(describing: state))")
             } catch {
                 fail(error)
+                return
             }
+            // start() only returns once the mic has delivered its first
+            // captured buffer (or timed out), so now the "go" cue is honest.
+            // If the user already released (push-to-talk) we may have been
+            // moved out of .preparing; only advance + chime if still preparing.
+            if state == .preparing {
+                SoundFeedback.start()
+                setState(.recording)
+            }
+            Log.info("begin() — now \(String(describing: state))")
         }
     }
 
@@ -253,8 +318,9 @@ final class DictationController: ObservableObject {
         // starting later must never reuse it.
         let cleaner = incrementalCleaner
         incrementalCleaner = nil
-        transcriber.onConfirmedText = nil
-        var text = await transcriber.stop()
+        let engine = sessionEngine ?? transcriber
+        engine.onConfirmedText = nil
+        var text = await engine.stop()
         // Log only the length — never the dictated content. The transcript can
         // contain passwords, 2FA codes, or private messages, and the unified log
         // is persisted and readable via Console/sysdiagnose.
@@ -311,15 +377,15 @@ final class DictationController: ObservableObject {
             // genuinely silent session. Only warn when we actually reached
             // .recording — a fast push-to-talk release from .preparing legitimately
             // captures almost nothing and shouldn't read as a mic failure.
-            if wasRecording, !transcriber.lastSessionCapturedAudio {
+            if wasRecording, !engine.lastSessionCapturedAudio {
                 OverlayController.shared.toast(
                     "🎤 No audio detected — check your microphone"
                 )
-            } else if wasRecording, transcriber.lastSessionSuppressedNonSpeech {
+            } else if wasRecording, engine.lastSessionSuppressedNonSpeech {
                 // Audio flowed but the detector heard no speech — almost always the
                 // wrong input is selected (e.g. AirPods that only picked up music
                 // while you spoke at the Mac). Name the mic so the fix is obvious.
-                if let mic = transcriber.activeInputDeviceName {
+                if let mic = engine.activeInputDeviceName {
                     OverlayController.shared.toast(
                         "🎤 No speech detected on “\(mic)” — switch your microphone"
                     )
@@ -379,6 +445,7 @@ final class DictationController: ObservableObject {
     private func discardIncrementalCleaner() {
         incrementalCleaner?.cancel()
         incrementalCleaner = nil
+        sessionEngine?.onConfirmedText = nil
         transcriber.onConfirmedText = nil
         HUDLiveState.shared.cleaningText = nil
     }
@@ -401,12 +468,12 @@ final class DictationController: ObservableObject {
         state = newState
         StatusController.shared.state = newState
         if newState == .idle {
-            // Stop the recording loop. forceStop() routes through the processor's
-            // stopRecording(), which — when warm-up is enabled — keeps the VPIO
-            // engine flowing (warm idle) instead of fully releasing the mic, so
-            // the next dictation starts instantly. We then arm a timer to release
-            // it after the configured window.
-            transcriber.forceStop()
+            // Stop the recording loop ON THE SESSION'S ENGINE. For Whisper,
+            // forceStop() routes through the processor's stopRecording(),
+            // which — when warm-up is enabled — keeps the VPIO engine flowing
+            // (warm idle) instead of fully releasing the mic; we then arm a
+            // timer to release it. The Apple engine tears down whole.
+            (sessionEngine ?? transcriber).forceStop()
             endDictationActivity()
             armWarmReleaseIfNeeded()
         } else {

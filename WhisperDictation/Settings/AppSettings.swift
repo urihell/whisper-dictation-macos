@@ -16,6 +16,26 @@ enum TriggerMode: String, CaseIterable, Identifiable {
     }
 }
 
+/// Which speech-to-text engine transcribes dictation.
+/// - `whisper`: WhisperKit (Core ML Whisper). Every language, most accurate,
+///   needs a one-time model download; the proven default.
+/// - `apple`: Apple's SpeechAnalyzer (macOS 26+). Starts instantly, no model
+///   download, lower power — but supports fewer languages. Sessions whose
+///   language it can't handle fall back to Whisper automatically.
+enum TranscriptionEngine: String, CaseIterable, Identifiable {
+    case whisper
+    case apple
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .whisper: return "Whisper — every language, most accurate"
+        case .apple: return "Apple Speech — instant start, lower power"
+        }
+    }
+}
+
 /// Which compute units WhisperKit loads the model onto.
 /// - `gpu`: Metal/GPU. Starts in seconds — the recommended default.
 /// - `neuralEngine`: more power-efficient and can be faster for large models.
@@ -85,6 +105,11 @@ final class AppSettings: ObservableObject {
     }
     @Published var modelName: String {
         didSet { defaults.set(modelName, forKey: Keys.modelName) }
+    }
+    /// Speech-to-text engine (Whisper default; Apple Speech is macOS 26+ only
+    /// and falls back to Whisper per-session for unsupported languages).
+    @Published var transcriptionEngine: TranscriptionEngine {
+        didSet { defaults.set(transcriptionEngine.rawValue, forKey: Keys.transcriptionEngine) }
     }
     /// Per-model compute backend (model name → backend raw value). Each model
     /// defaults to GPU for fast, well-cached startup; the user can opt an
@@ -212,6 +237,7 @@ final class AppSettings: ObservableObject {
     private init() {
         triggerMode = TriggerMode(rawValue: defaults.string(forKey: Keys.triggerMode) ?? "") ?? .toggle
         modelName = defaults.string(forKey: Keys.modelName) ?? "openai_whisper-base"
+        transcriptionEngine = TranscriptionEngine(rawValue: defaults.string(forKey: Keys.transcriptionEngine) ?? "") ?? .whisper
         computeBackends = (defaults.dictionary(forKey: Keys.computeBackends) as? [String: String]) ?? [:]
         restoreClipboard = defaults.object(forKey: Keys.restoreClipboard) as? Bool ?? true
         directTyping = defaults.object(forKey: Keys.directTyping) as? Bool ?? true
@@ -252,6 +278,7 @@ final class AppSettings: ObservableObject {
     private enum Keys {
         static let triggerMode = "triggerMode"
         static let modelName = "modelName"
+        static let transcriptionEngine = "transcriptionEngine"
         static let computeBackends = "computeBackends"
         static let restoreClipboard = "restoreClipboard"
         static let directTyping = "directTyping"

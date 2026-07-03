@@ -35,8 +35,8 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.udabby.WhisperDictation
         PRODUCT_NAME: WhisperDictation
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        MARKETING_VERSION: "1.9.5"
-        CURRENT_PROJECT_VERSION: "12"
+        MARKETING_VERSION: "1.10.0"
+        CURRENT_PROJECT_VERSION: "13"
         SWIFT_VERSION: "5.0"
         INFOPLIST_FILE: WhisperDictation/Support/Info.plist
         CODE_SIGN_ENTITLEMENTS: WhisperDictation/Support/WhisperDictation.entitlements

@@ -183,6 +183,19 @@ struct SettingsView: View {
 
     private var model: some View {
         Form {
+            if #available(macOS 26.0, *) {
+                Section {
+                    Picker("Engine", selection: $settings.transcriptionEngine) {
+                        ForEach(TranscriptionEngine.allCases) { engine in
+                            Text(engine.label).tag(engine)
+                        }
+                    }
+                    Text("Apple Speech starts instantly with no model download and uses less power, but needs a specific language: set one in General → Language. With Auto-detect, Whisper is used (only it can identify the language as you speak); unsupported languages also fall back to Whisper automatically. The Whisper settings below apply whenever Whisper is used.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             Picker("Whisper model", selection: $settings.modelName) {
                 Text("Tiny — fastest, lowest accuracy").tag("openai_whisper-tiny")
                 Text("Base — fast, decent").tag("openai_whisper-base")

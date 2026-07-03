@@ -551,6 +551,18 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
         deviceName(for: deviceID)
     }
 
+    /// The name of the device a session would actually capture from: the
+    /// user's explicit selection if connected, else the live system default.
+    /// Shared by both engines for the wrong-input warning and the menu line.
+    @MainActor
+    static func activeCaptureDeviceName() -> String? {
+        let uid = AppSettings.shared.audioInputDeviceUID
+        if !uid.isEmpty, let id = deviceID(forUID: uid), let name = deviceName(forID: id) {
+            return name
+        }
+        return defaultInputDeviceName()
+    }
+
     /// The display name of the current system default input device, or nil.
     static func defaultInputDeviceName() -> String? {
         guard let id = defaultInputDeviceID() else { return nil }
