@@ -47,8 +47,11 @@ final class AppleSpeechEngine: DictationEngine {
     /// Apple's transcriber doesn't hallucinate on silence — never suppress.
     let lastSessionSuppressedNonSpeech = false
 
+    /// Per-session input-device override (per-app profile); see DictationEngine.
+    var inputDeviceUIDOverride: String?
+
     var activeInputDeviceName: String? {
-        SelectableInputAudioProcessor.activeCaptureDeviceName()
+        SelectableInputAudioProcessor.captureDeviceName(overridingUID: inputDeviceUIDOverride)
     }
 
     /// Same battle-tested capture stack as the Whisper path.
@@ -87,27 +90,64 @@ final class AppleSpeechEngine: DictationEngine {
         guard let language else {
             throw AppleSpeechEngineError.localeUnsupported
         }
-        guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: language)) else {
-            throw AppleSpeechEngineError.localeUnsupported
+        // Standard vs dictation-tuned module (experimental Settings toggle).
+        // Each has its own Result type, so the results pump is prepared
+        // alongside the module and started only after the guards below pass.
+        let module: any SpeechModule
+        let localeID: String
+        let startResultsPump: () -> Void
+        if AppSettings.shared.appleDictationModel {
+            guard let locale = await DictationTranscriber.supportedLocale(equivalentTo: Locale(identifier: language)) else {
+                throw AppleSpeechEngineError.localeUnsupported
+            }
+            let dictation = DictationTranscriber(
+                locale: locale,
+                contentHints: [],
+                transcriptionOptions: [.punctuation],
+                reportingOptions: [.volatileResults, .frequentFinalization],
+                attributeOptions: []
+            )
+            module = dictation
+            localeID = locale.identifier
+            startResultsPump = { [weak self] in
+                guard let self else { return }
+                self.resultsTask = self.startPump(dictation.results, token: token) {
+                    (String($0.text.characters), $0.isFinal)
+                }
+            }
+        } else {
+            guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: language)) else {
+                throw AppleSpeechEngineError.localeUnsupported
+            }
+            let transcriber = SpeechTranscriber(
+                locale: locale,
+                transcriptionOptions: [],
+                reportingOptions: [.volatileResults, .fastResults],
+                attributeOptions: []
+            )
+            module = transcriber
+            localeID = locale.identifier
+            startResultsPump = { [weak self] in
+                guard let self else { return }
+                self.resultsTask = self.startPump(transcriber.results, token: token) {
+                    (String($0.text.characters), $0.isFinal)
+                }
+            }
         }
         guard token == currentSession else { return }
 
-        let transcriber = SpeechTranscriber(
-            locale: locale,
-            transcriptionOptions: [],
-            reportingOptions: [.volatileResults, .fastResults],
-            attributeOptions: []
-        )
         // First use of a language downloads its assets (small; nothing like a
-        // Whisper model). No-op when already installed.
-        if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
-            Log.info("AppleSpeech: downloading assets for \(locale.identifier)…")
+        // Whisper model). No-op when already installed — and Settings
+        // pre-downloads when the engine/language is picked, so a session
+        // rarely pays this.
+        if let request = try await AssetInventory.assetInstallationRequest(supporting: [module]) {
+            Log.info("AppleSpeech: downloading assets for \(localeID)…")
             try await request.downloadAndInstall()
             Log.info("AppleSpeech: assets installed.")
         }
         guard token == currentSession else { return }
 
-        guard let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
+        guard let analyzerFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module]) else {
             throw AppleSpeechEngineError.audioFormatUnavailable
         }
         guard token == currentSession else { return }
@@ -124,36 +164,23 @@ final class AppleSpeechEngine: DictationEngine {
             || analyzerFormat.channelCount != sourceFormat.channelCount
             || analyzerFormat.commonFormat != sourceFormat.commonFormat
         let converter = needsConversion ? AVAudioConverter(from: sourceFormat, to: analyzerFormat) : nil
-        Log.info("AppleSpeech: locale=\(locale.identifier), analyzer wants \(Int(analyzerFormat.sampleRate)) Hz/\(analyzerFormat.channelCount)ch\(needsConversion ? " (resampling from 16 kHz mono)" : "")")
+        Log.info("AppleSpeech: locale=\(localeID), model=\(AppSettings.shared.appleDictationModel ? "dictation" : "standard"), analyzer wants \(Int(analyzerFormat.sampleRate)) Hz/\(analyzerFormat.channelCount)ch\(needsConversion ? " (resampling from 16 kHz mono)" : "")")
 
         let (inputStream, continuation) = AsyncStream<AnalyzerInput>.makeStream()
         inputContinuation = continuation
-        let analyzer = SpeechAnalyzer(modules: [transcriber])
+        let analyzer = SpeechAnalyzer(modules: [module])
         self.analyzer = analyzer
 
         // Results pump: volatile → live HUD; final → transcript + cleanup feed.
-        resultsTask = Task { [weak self] in
-            do {
-                for try await result in transcriber.results {
-                    let text = String(result.text.characters)
-                    let isFinal = result.isFinal
-                    await MainActor.run { self?.ingest(text: text, isFinal: isFinal, token: token) }
-                }
-            } catch {
-                Log.error("AppleSpeech: results stream error: \(error.localizedDescription)")
-                await MainActor.run {
-                    guard let self, token == self.currentSession else { return }
-                    self.onStreamError?(error)
-                }
-            }
-        }
+        startResultsPump()
 
         try await analyzer.start(inputSequence: inputStream)
         guard token == currentSession else { return }
 
         // Same device + voice-processing policy as the Whisper path; never
-        // warm-idle (nothing here has a cold start worth amortizing).
-        let uid = AppSettings.shared.audioInputDeviceUID
+        // warm-idle (nothing here has a cold start worth amortizing). A
+        // per-app override ("" = system default) replaces the global setting.
+        let uid = inputDeviceUIDOverride ?? AppSettings.shared.audioInputDeviceUID
         let device: DeviceID? = uid.isEmpty ? nil : SelectableInputAudioProcessor.deviceID(forUID: uid)
         processor.selectedDeviceID = device
         processor.voiceIsolationEnabled = SelectableInputAudioProcessor.shouldEngageVoiceProcessing(forInputDevice: device)
@@ -231,6 +258,65 @@ final class AppleSpeechEngine: DictationEngine {
     }
 
     // MARK: - Results
+
+    /// Shared results pump: both module types stream Result values whose text
+    /// and finality are pulled out by `extract`.
+    private func startPump<S: AsyncSequence & Sendable>(
+        _ results: S,
+        token: Int,
+        extract: @escaping (S.Element) -> (String, Bool)
+    ) -> Task<Void, Never> where S.Element: Sendable {
+        Task { [weak self] in
+            do {
+                for try await result in results {
+                    let (text, isFinal) = extract(result)
+                    await MainActor.run { self?.ingest(text: text, isFinal: isFinal, token: token) }
+                }
+            } catch {
+                Log.error("AppleSpeech: results stream error: \(error.localizedDescription)")
+                await MainActor.run {
+                    guard let self, token == self.currentSession else { return }
+                    self.onStreamError?(error)
+                }
+            }
+        }
+    }
+
+    /// Download the assets for `languageCode` in the background so the first
+    /// real session doesn't pay the download at dictation start. Called from
+    /// Settings when the engine/language/model changes, and at launch.
+    /// Fire-and-forget; failures only log (the session-start path retries).
+    static func preinstallAssets(languageCode: String?) {
+        guard let languageCode else { return }   // auto → Whisper, nothing to fetch
+        Task { @MainActor in
+            do {
+                let module: any SpeechModule
+                if AppSettings.shared.appleDictationModel {
+                    guard let locale = await DictationTranscriber.supportedLocale(equivalentTo: Locale(identifier: languageCode)) else { return }
+                    module = DictationTranscriber(
+                        locale: locale, contentHints: [],
+                        transcriptionOptions: [.punctuation],
+                        reportingOptions: [.volatileResults, .frequentFinalization],
+                        attributeOptions: []
+                    )
+                } else {
+                    guard let locale = await SpeechTranscriber.supportedLocale(equivalentTo: Locale(identifier: languageCode)) else { return }
+                    module = SpeechTranscriber(
+                        locale: locale, transcriptionOptions: [],
+                        reportingOptions: [.volatileResults, .fastResults],
+                        attributeOptions: []
+                    )
+                }
+                if let request = try await AssetInventory.assetInstallationRequest(supporting: [module]) {
+                    Log.info("AppleSpeech: pre-downloading assets for \(languageCode)…")
+                    try await request.downloadAndInstall()
+                    Log.info("AppleSpeech: assets ready for \(languageCode).")
+                }
+            } catch {
+                Log.error("AppleSpeech: asset pre-download failed: \(error.localizedDescription)")
+            }
+        }
+    }
 
     private func ingest(text: String, isFinal: Bool, token: Int) {
         guard token >= invalidBefore else { return }   // cancelled session

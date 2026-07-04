@@ -31,6 +31,9 @@ per-use cost.
   like dictate → translate → paste) and **Get Last Transcript**
 - ⬆️ **Check for Updates** in the menu — user-initiated only; the app never
   phones home on its own
+- 🎛️ **Per-app overrides** — a fixed language per app (Hebrew in WhatsApp,
+  English in your editor), always press Return in Slack, clipboard-paste into
+  that one stubborn Electron app; everything else follows your defaults
 - 🪧 **Menu bar only** — no Dock icon, stays out of the way
 - 🔒 **Fully offline** after the first model download — nothing leaves your Mac
 

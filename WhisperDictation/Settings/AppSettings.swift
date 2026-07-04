@@ -111,6 +111,20 @@ final class AppSettings: ObservableObject {
     @Published var transcriptionEngine: TranscriptionEngine {
         didSet { defaults.set(transcriptionEngine.rawValue, forKey: Keys.transcriptionEngine) }
     }
+    /// Experimental: use Apple's dictation-tuned model (DictationTranscriber)
+    /// instead of the general transcription model. May punctuate/segment
+    /// dictation better; off by default until proven.
+    @Published var appleDictationModel: Bool {
+        didSet { defaults.set(appleDictationModel, forKey: Keys.appleDictationModel) }
+    }
+    /// Per-app overrides for insertion behavior (press Return, direct vs
+    /// clipboard). Stored as JSON; empty by default so behavior is unchanged
+    /// unless the user adds an app.
+    @Published var appProfiles: [AppProfile] {
+        didSet {
+            defaults.set(try? JSONEncoder().encode(appProfiles), forKey: Keys.appProfiles)
+        }
+    }
     /// Per-model compute backend (model name → backend raw value). Each model
     /// defaults to GPU for fast, well-cached startup; the user can opt an
     /// individual model into the Neural Engine. Stored as raw strings so it
@@ -238,6 +252,9 @@ final class AppSettings: ObservableObject {
         triggerMode = TriggerMode(rawValue: defaults.string(forKey: Keys.triggerMode) ?? "") ?? .toggle
         modelName = defaults.string(forKey: Keys.modelName) ?? "openai_whisper-base"
         transcriptionEngine = TranscriptionEngine(rawValue: defaults.string(forKey: Keys.transcriptionEngine) ?? "") ?? .whisper
+        appleDictationModel = defaults.object(forKey: Keys.appleDictationModel) as? Bool ?? false
+        appProfiles = (defaults.data(forKey: Keys.appProfiles))
+            .flatMap { try? JSONDecoder().decode([AppProfile].self, from: $0) } ?? []
         computeBackends = (defaults.dictionary(forKey: Keys.computeBackends) as? [String: String]) ?? [:]
         restoreClipboard = defaults.object(forKey: Keys.restoreClipboard) as? Bool ?? true
         directTyping = defaults.object(forKey: Keys.directTyping) as? Bool ?? true
@@ -279,6 +296,8 @@ final class AppSettings: ObservableObject {
         static let triggerMode = "triggerMode"
         static let modelName = "modelName"
         static let transcriptionEngine = "transcriptionEngine"
+        static let appleDictationModel = "appleDictationModel"
+        static let appProfiles = "appProfiles"
         static let computeBackends = "computeBackends"
         static let restoreClipboard = "restoreClipboard"
         static let directTyping = "directTyping"

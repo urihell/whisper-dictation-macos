@@ -114,8 +114,12 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
         clearStopSnapshot()
         // Adopt a warm-idle engine: just attach the streamer's callback and keep
         // the already-converged, flowing engine. Only valid if this session also
-        // wants VPIO (both warm-idle and session use the built-in/wired path).
-        if isWarmIdle, isolationEngine != nil, voiceIsolationEnabled {
+        // wants VPIO (both warm-idle and session use the built-in/wired path)
+        // AND the same device — a per-app mic override can change devices
+        // between sessions, and a warm engine stays pinned to the device it
+        // was built on, so adopting across a device switch would silently
+        // capture from the wrong mic. Mismatch tears down and rebuilds cold.
+        if isWarmIdle, isolationEngine != nil, voiceIsolationEnabled, device == isolationEngineDeviceID {
             isWarmIdle = false           // stop the idle cap before attaching the session
             clearBuffersLocked()         // drop idle pre-roll; safe vs the still-firing tap
             isolationCallback = callback
@@ -202,7 +206,12 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
 
     /// Builds the Voice-Processing capture graph and starts the engine. Used by the
     /// immediate-start path (`startIsolatedRecording`).
+    /// The device the current isolation engine was pinned to (nil = system
+    /// default). Read by the warm-adopt path to refuse cross-device adoption.
+    private(set) var isolationEngineDeviceID: DeviceID?
+
     private func buildAndStartIsolationEngine(inputDeviceID: DeviceID?) throws {
+        isolationEngineDeviceID = inputDeviceID
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
 
@@ -322,6 +331,7 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
         engine.reset()
         isolationEngine = nil
         isolationCallback = nil
+        isolationEngineDeviceID = nil
         isWarmIdle = false
     }
 
@@ -556,7 +566,14 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
     /// Shared by both engines for the wrong-input warning and the menu line.
     @MainActor
     static func activeCaptureDeviceName() -> String? {
-        let uid = AppSettings.shared.audioInputDeviceUID
+        captureDeviceName(overridingUID: nil)
+    }
+
+    /// Like `activeCaptureDeviceName`, honoring a per-app override UID
+    /// (nil = global setting; "" = system default; else a device UID).
+    @MainActor
+    static func captureDeviceName(overridingUID: String?) -> String? {
+        let uid = overridingUID ?? AppSettings.shared.audioInputDeviceUID
         if !uid.isEmpty, let id = deviceID(forUID: uid), let name = deviceName(forID: id) {
             return name
         }

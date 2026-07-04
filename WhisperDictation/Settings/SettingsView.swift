@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import KeyboardShortcuts
 import LaunchAtLogin
+import UniformTypeIdentifiers
 import WhisperKit
 
 extension Notification.Name {
@@ -18,7 +19,7 @@ struct SettingsView: View {
     private typealias AudioInputDevice = SelectableInputAudioProcessor.InputDevice
 
     private enum Tab: Hashable {
-        case general, model, audio, shortcut, dictionary
+        case general, model, audio, shortcut, dictionary, apps
     }
 
     @StateObject private var settings = AppSettings.shared
@@ -51,6 +52,9 @@ struct SettingsView: View {
                 dictionary
                     .tabItem { Label("Dictionary", systemImage: "character.book.closed") }
                     .tag(Tab.dictionary)
+                apps
+                    .tabItem { Label("Apps", systemImage: "square.grid.2x2") }
+                    .tag(Tab.apps)
             }
             .formStyle(.grouped)
             .tint(.brand)
@@ -69,6 +73,12 @@ struct SettingsView: View {
         .onReceive(NotificationCenter.default.publisher(for: .settingsAccessed)) { _ in
             selectedTab = .general
         }
+        // Pre-download Apple Speech assets the moment the engine/language/model
+        // choice makes them relevant, so the first dictation doesn't pay the
+        // download at start.
+        .onChange(of: settings.transcriptionEngine) { preinstallAppleAssetsIfNeeded() }
+        .onChange(of: settings.language) { preinstallAppleAssetsIfNeeded() }
+        .onChange(of: settings.appleDictationModel) { preinstallAppleAssetsIfNeeded() }
     }
 
     private var header: some View {
@@ -177,8 +187,76 @@ struct SettingsView: View {
                 Text("Portuguese").tag("pt")
                 Text("Mandarin").tag("zh")
             }
+
         }
         .padding()
+    }
+
+    /// Per-app overrides tab: one section per configured app, each field
+    /// tri-state so an untouched field follows the global setting.
+    private var apps: some View {
+        Form {
+            ForEach($settings.appProfiles) { $profile in
+                Section {
+                    Picker("Language", selection: $profile.language) {
+                        Text("Use global setting").tag(String?.none)
+                        Text("Auto-detect").tag(String?.some("auto"))
+                        Text("English").tag(String?.some("en"))
+                        Text("Spanish").tag(String?.some("es"))
+                        Text("Hebrew").tag(String?.some("he"))
+                        Text("French").tag(String?.some("fr"))
+                        Text("German").tag(String?.some("de"))
+                        Text("Portuguese").tag(String?.some("pt"))
+                        Text("Mandarin").tag(String?.some("zh"))
+                    }
+                    Picker("Press Return after inserting", selection: $profile.pressReturn) {
+                        Text("Use global setting").tag(Bool?.none)
+                        Text("Always").tag(Bool?.some(true))
+                        Text("Never").tag(Bool?.some(false))
+                    }
+                    Picker("Insertion method", selection: $profile.useClipboard) {
+                        Text("Use global setting").tag(Bool?.none)
+                        Text("Direct typing").tag(Bool?.some(false))
+                        Text("Clipboard paste").tag(Bool?.some(true))
+                    }
+                    Picker("Microphone", selection: $profile.inputDeviceUID) {
+                        Text("Use global setting").tag(String?.none)
+                        Text("System Default").tag(String?.some(""))
+                        ForEach(audioDevices) { device in
+                            Text(device.name).tag(String?.some(device.id))
+                        }
+                        // Keep a saved-but-disconnected device selected
+                        // (sessions fall back to the system default until it
+                        // returns) rather than silently resetting it.
+                        if let uid = profile.inputDeviceUID, !uid.isEmpty,
+                           !audioDevices.contains(where: { $0.id == uid }) {
+                            Text("Saved device (not connected)").tag(String?.some(uid))
+                        }
+                    }
+                } header: {
+                    HStack {
+                        Text(profile.name)
+                        Spacer()
+                        Button(role: .destructive) {
+                            settings.appProfiles.removeAll { $0.bundleID == profile.bundleID }
+                        } label: { Image(systemName: "trash") }
+                        .buttonStyle(.borderless)
+                    }
+                }
+            }
+
+            Section {
+                Button("Add App…", action: addAppProfile)
+                Text("Override behavior for specific apps, matched against the app being dictated into — e.g. always press Return in Slack, clipboard paste for an app that drops synthesized typing, or Hebrew in WhatsApp while everything else stays English. The language override also picks the engine (fixed language + Apple Speech = fast path). Anything not overridden follows the global settings.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding()
+        // The Microphone pickers need the device list too — without this it
+        // only loads when the Audio tab appears, leaving these pickers empty.
+        .onAppear(perform: reloadAudioDevices)
     }
 
     private var model: some View {
@@ -194,6 +272,13 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                    if settings.transcriptionEngine == .apple {
+                        Toggle("Use dictation-tuned model (experimental)", isOn: $settings.appleDictationModel)
+                        Text("Apple ships a second model tuned for dictation rather than long-form transcription — it may punctuate and segment better. Try it and compare.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
             Picker("Whisper model", selection: $settings.modelName) {
@@ -511,6 +596,36 @@ struct SettingsView: View {
             .disabled(selection.wrappedValue == SoundFeedback.none)
             .help("Preview")
         }
+    }
+
+    private func preinstallAppleAssetsIfNeeded() {
+        if #available(macOS 26.0, *), settings.transcriptionEngine == .apple {
+            AppleSpeechEngine.preinstallAssets(languageCode: settings.forcedLanguageCode)
+        }
+    }
+
+    /// Adds a per-app override by picking a .app bundle (reads its bundle id).
+    private func addAppProfile() {
+        let panel = NSOpenPanel()
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.allowedContentTypes = [.applicationBundle]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.message = "Choose an app to override insertion behavior for"
+        guard panel.runModal() == .OK,
+              let url = panel.url,
+              let bundleID = Bundle(url: url)?.bundleIdentifier else { return }
+        guard !settings.appProfiles.contains(where: {
+            $0.bundleID.caseInsensitiveCompare(bundleID) == .orderedSame
+        }) else { return }
+        settings.appProfiles.append(AppProfile(
+            bundleID: bundleID,
+            name: url.deletingPathExtension().lastPathComponent,
+            pressReturn: nil,
+            useClipboard: nil,
+            language: nil,
+            inputDeviceUID: nil
+        ))
     }
 
     private func addTerm() {

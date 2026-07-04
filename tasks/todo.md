@@ -5,6 +5,12 @@ cold-start first-word work, June 2026) and `lessons.md` (accumulated debugging
 lessons — read before touching the audio path).
 
 ## Up next
+- [x] Apple engine polish (1.11.0): asset pre-download from Settings/launch,
+      HUD engine badge, experimental DictationTranscriber toggle.
+- [x] Per-app overrides (1.11.0): language (also picks the engine), mic,
+      press-Return, direct/clipboard — tri-state (nil = global), own
+      "Apps" Settings tab. Warm-adopt now refuses cross-device adoption.
+      Largely supersedes the per-hotkey-language idea.
 - [x] App Intents / Shortcuts support — Toggle/Start/Stop (1.9.4), plus
       Dictate Text (capture-only, returns transcript) and Get Last
       Transcript (1.9.5).

@@ -64,6 +64,14 @@ final class DictationController: ObservableObject {
     /// language). All session teardown paths must go through this reference —
     /// stopping the wrong engine would leave a live mic.
     private var sessionEngine: (any DictationEngine)?
+    /// Which engine kind the current session runs on — drives the HUD's engine
+    /// badge so a silent fallback to Whisper is visible. Nil when idle.
+    @Published private(set) var sessionEngineKind: TranscriptionEngine?
+    /// The current session's effective language (nil = auto-detect), after
+    /// applying any per-app override. Captured at begin() and used everywhere
+    /// downstream (engine start, cleanup hint, auto-capitalization) so the
+    /// whole session agrees on one language.
+    private var sessionLanguageCode: String?
 
     /// Lazily-built Apple Speech engine (macOS 26+). Stored type-erased so the
     /// property itself needs no availability annotation.
@@ -80,15 +88,15 @@ final class DictationController: ObservableObject {
         return engine
     }
 
-    /// Engine for a NEW session per the setting; Whisper unless Apple Speech
-    /// is selected and the OS has it. Auto-detect ALWAYS routes to Whisper:
-    /// Apple's transcriber is single-language per session, so under "auto" it
-    /// would silently pin to the system language and mangle anything else
-    /// (observed: Hebrew dictated into an English-locked session).
-    private func selectEngine() -> any DictationEngine {
+    /// Engine for a NEW session per the setting and the session's effective
+    /// language. Auto-detect ALWAYS routes to Whisper: Apple's transcriber is
+    /// single-language per session, so under "auto" it would silently pin to
+    /// the system language and mangle anything else (observed: Hebrew dictated
+    /// into an English-locked session).
+    private func selectEngine(languageCode: String?) -> any DictationEngine {
         if #available(macOS 26.0, *),
            AppSettings.shared.transcriptionEngine == .apple {
-            if AppSettings.shared.forcedLanguageCode != nil {
+            if languageCode != nil {
                 return appleEngine
             }
             Log.info("Language is auto-detect — using Whisper (Apple Speech needs a fixed language).")
@@ -143,6 +151,8 @@ final class DictationController: ObservableObject {
            AppSettings.shared.transcriptionEngine == .apple,
            AppSettings.shared.forcedLanguageCode != nil {
             Log.info("Apple engine selected — skipping Whisper model preload (loads on demand for fallback).")
+            // Make sure the language's assets are on disk before first use.
+            AppleSpeechEngine.preinstallAssets(languageCode: AppSettings.shared.forcedLanguageCode)
             return
         }
         transcriber.requestModel(AppSettings.shared.modelName)
@@ -232,8 +242,27 @@ final class DictationController: ObservableObject {
     func begin() {
         guard state == .idle else { return }
         Log.info("begin() — preparing")
-        let engine = selectEngine()
+        // Effective language: per-app override (matched against the app being
+        // dictated into — frontmost at start) wins over the global setting.
+        // "auto" → nil; this decides the engine, so it must resolve up front.
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        let profile = AppProfile.profile(
+            for: frontmost?.bundleIdentifier,
+            in: AppSettings.shared.appProfiles
+        )
+        let languageSetting = profile?.language ?? AppSettings.shared.language
+        let language: String? = languageSetting == "auto" ? nil : languageSetting
+        sessionLanguageCode = language
+        if let override = profile?.language {
+            Log.info("begin() — per-app language override for \(profile?.bundleID ?? "?"): \(override)")
+        }
+        let engine = selectEngine(languageCode: language)
         sessionEngine = engine
+        sessionEngineKind = (engine === transcriber) ? .whisper : .apple
+        // Per-app mic override rides the session engine; nil clears any
+        // previous session's override.
+        engine.inputDeviceUIDOverride = profile?.inputDeviceUID
+        let deviceOverride = profile?.inputDeviceUID
         // A pending warm-window release is now moot — this session will use (and
         // re-arm) the engine. Cancel it so it can't tear the mic down mid-session.
         cancelWarmRelease()
@@ -256,7 +285,7 @@ final class DictationController: ObservableObject {
         var onConfirmed: ((String) -> Void)?
         if AppSettings.shared.cleanupEnabled, SpeechCleaner.isAvailable {
             SpeechCleaner.prewarm()
-            let cleaner = IncrementalCleaner(languageHint: AppSettings.shared.forcedLanguageCode)
+            let cleaner = IncrementalCleaner(languageHint: language)
             incrementalCleaner = cleaner
             onConfirmed = { [weak cleaner] confirmed in
                 cleaner?.ingest(confirmed: confirmed)
@@ -267,16 +296,20 @@ final class DictationController: ObservableObject {
         engine.onConfirmedText = onConfirmed
         Task {
             do {
-                try await engine.start(language: AppSettings.shared.forcedLanguageCode)
+                try await engine.start(language: language)
             } catch let error as AppleSpeechEngineError {
                 // Apple engine can't handle this language on this Mac — fall
-                // back to Whisper transparently for THIS session.
+                // back to Whisper transparently for THIS session. Tear the
+                // half-built Apple session down first so nothing leaks.
                 Log.info("Apple Speech unavailable (\(error.localizedDescription)) — falling back to Whisper for this session.")
                 OverlayController.shared.toast("Using Whisper for this language")
+                sessionEngine?.forceStop()
                 sessionEngine = transcriber
+                sessionEngineKind = .whisper
+                transcriber.inputDeviceUIDOverride = deviceOverride
                 transcriber.onConfirmedText = onConfirmed
                 do {
-                    try await transcriber.start(language: AppSettings.shared.forcedLanguageCode)
+                    try await transcriber.start(language: language)
                 } catch {
                     fail(error)
                     return
@@ -341,7 +374,7 @@ final class DictationController: ObservableObject {
             } else {
                 text = await SpeechCleaner.clean(
                     text,
-                    languageHint: AppSettings.shared.forcedLanguageCode,
+                    languageHint: sessionLanguageCode,
                     onPartial: onPartial
                 )
             }
@@ -359,7 +392,7 @@ final class DictationController: ObservableObject {
         // Cheap auto-capitalization (no LLM). English-only "i" fix for auto-detect
         // or an explicit English selection.
         if AppSettings.shared.autoCapitalize {
-            let lang = AppSettings.shared.forcedLanguageCode
+            let lang = sessionLanguageCode
             text = TextFormatter.autoCapitalize(text, english: lang == nil || lang == "en")
         }
 
@@ -407,11 +440,22 @@ final class DictationController: ObservableObject {
             return
         }
         setState(.inserting)
+        // Per-app overrides, resolved against the app being dictated into
+        // (frontmost — this LSUIElement app never takes that spot). Precedence:
+        // explicit submit intent > app profile > global setting.
+        let frontmost = NSWorkspace.shared.frontmostApplication
+        let profile = AppProfile.profile(
+            for: frontmost?.bundleIdentifier,
+            in: AppSettings.shared.appProfiles
+        )
+        if let profile {
+            Log.info("insert: applying per-app profile for \(profile.bundleID)")
+        }
         inserter.insert(
             text,
-            directType: AppSettings.shared.directTyping,
+            directType: profile?.useClipboard.map { !$0 } ?? AppSettings.shared.directTyping,
             restoreClipboard: AppSettings.shared.restoreClipboard,
-            pressReturn: pressReturn ?? AppSettings.shared.pressReturnAfterInsert
+            pressReturn: pressReturn ?? profile?.pressReturn ?? AppSettings.shared.pressReturnAfterInsert
         )
         setState(.idle)
     }
@@ -474,6 +518,7 @@ final class DictationController: ObservableObject {
             // (warm idle) instead of fully releasing the mic; we then arm a
             // timer to release it. The Apple engine tears down whole.
             (sessionEngine ?? transcriber).forceStop()
+            sessionEngineKind = nil
             endDictationActivity()
             armWarmReleaseIfNeeded()
         } else {

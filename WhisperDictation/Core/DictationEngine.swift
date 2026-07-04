@@ -22,6 +22,10 @@ protocol DictationEngine: AnyObject {
     var lastSessionSuppressedNonSpeech: Bool { get }
     /// Human-readable name of the input device a session captures from.
     var activeInputDeviceName: String? { get }
+    /// Per-session input-device override (from a per-app profile): nil = use
+    /// the global setting; "" = system default; else a device UID. Set by the
+    /// controller before start().
+    var inputDeviceUIDOverride: String? { get set }
 
     func start(language: String?) async throws
     func stop() async -> String

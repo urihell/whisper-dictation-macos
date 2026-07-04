@@ -18,7 +18,8 @@ struct MenuContent: View {
         // Surface the mic a session would actually capture from — wrong-input
         // confusion (e.g. AirPods grabbed by the phone) is the top support
         // issue, and seeing the name here catches it before a lost dictation.
-        if let mic = controller.transcriber.activeInputDeviceName {
+        // Global view (per-app overrides apply per session, not here).
+        if let mic = SelectableInputAudioProcessor.activeCaptureDeviceName() {
             Text("Mic: \(mic)")
         }
 

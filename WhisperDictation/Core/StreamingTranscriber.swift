@@ -349,11 +349,15 @@ final class StreamingTranscriber: ObservableObject {
     /// Resolve the input device and the device-aware voice-processing decision,
     /// and apply both to the processor. Returns whether VPIO will be engaged.
     /// Used by `start()` to resolve the device + VPIO decision for a session.
+    /// Per-session input-device override (per-app profile); see DictationEngine.
+    var inputDeviceUIDOverride: String?
+
     @discardableResult
     private func configureVoiceProcessing(on proc: SelectableInputAudioProcessor) -> Bool {
         // Resolve the persisted device UID to a live runtime ID; nil (system
-        // default) when unset or the device isn't connected right now.
-        let uid = AppSettings.shared.audioInputDeviceUID
+        // default) when unset or the device isn't connected right now. A
+        // per-app override ("" = system default) replaces the global setting.
+        let uid = inputDeviceUIDOverride ?? AppSettings.shared.audioInputDeviceUID
         let device: DeviceID? = uid.isEmpty ? nil : SelectableInputAudioProcessor.deviceID(forUID: uid)
         if !uid.isEmpty, device == nil {
             Log.info("Selected input device not connected; using system default.")
@@ -407,16 +411,9 @@ final class StreamingTranscriber: ObservableObject {
     }
 
     /// The human-readable name of the input device a session would actually
-    /// capture from: the user's explicit selection if connected, otherwise the
-    /// live system default. Used to name the mic in the wrong-input warning.
+    /// capture from (override-aware). Used in the wrong-input warning.
     var activeInputDeviceName: String? {
-        let uid = AppSettings.shared.audioInputDeviceUID
-        if !uid.isEmpty,
-           let id = SelectableInputAudioProcessor.deviceID(forUID: uid),
-           let name = SelectableInputAudioProcessor.deviceName(forID: id) {
-            return name
-        }
-        return SelectableInputAudioProcessor.defaultInputDeviceName()
+        SelectableInputAudioProcessor.captureDeviceName(overridingUID: inputDeviceUIDOverride)
     }
 
     /// Whether a VPIO engine is currently held warm between sessions.

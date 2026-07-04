@@ -41,6 +41,9 @@ struct DictationHUD: View {
                 }
             }
 
+            if controller.sessionEngineKind == .apple {
+                engineBadge
+            }
             if transcriber.voiceIsolationActive {
                 isolationBadge
             }
@@ -60,6 +63,18 @@ struct DictationHUD: View {
     }
 
     private static let textAnchor = "hud-text"
+
+    /// Passive indicator that this session runs on the Apple Speech engine —
+    /// its absence means Whisper (default, or the automatic language fallback),
+    /// so a silent fallback is visible at a glance.
+    private var engineBadge: some View {
+        Image(systemName: "apple.logo")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(.secondary)
+            .padding(.top, 3)
+            .help("Apple Speech engine for this session")
+            .accessibilityLabel("Apple Speech engine for this session")
+    }
 
     /// Passive indicator that this session is capturing with noise reduction on.
     /// Read-only — the HUD is a non-activating panel that must never take focus or
