@@ -7,8 +7,13 @@ struct ToastView: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: "checkmark.circle.fill")
-                .foregroundStyle(.green)
+            // The green check reads as "success" — wrong next to warnings
+            // ("✓ ⚠️ Couldn't check for updates"). Messages that lead with
+            // their own symbol (⚠️ 🎤 ⬆️ ✓ …) get no extra icon.
+            if message.first?.isLetter ?? true {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+            }
             Text(message)
                 .font(.system(size: 14, weight: .medium, design: .rounded))
                 .foregroundStyle(.primary)
