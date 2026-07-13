@@ -77,9 +77,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // items, Bartender): opening the app again brings up Settings. ⌘, can't be
     // trusted here because the app is rarely the frontmost one.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
+        // Same treatment as the menu's "Settings…": reset to the first tab and
+        // raise the window even if it was already open in the background.
+        NotificationCenter.default.post(name: .settingsAccessed, object: nil)
         NSApp.activate(ignoringOtherApps: true)
         // SwiftUI's Settings scene is opened via this AppKit selector (macOS 14+).
         NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
+        DispatchQueue.main.async {
+            if let window = NSApp.windows.first(where: {
+                $0.identifier?.rawValue.contains("Settings") == true
+                    || $0.title.hasSuffix("Settings")
+            }) {
+                window.makeKeyAndOrderFront(nil)
+            }
+        }
         return true
     }
 

@@ -76,7 +76,14 @@ struct SettingsView: View {
         // Pre-download Apple Speech assets the moment the engine/language/model
         // choice makes them relevant, so the first dictation doesn't pay the
         // download at start.
-        .onChange(of: settings.transcriptionEngine) { preinstallAppleAssetsIfNeeded() }
+        .onChange(of: settings.transcriptionEngine) {
+            preinstallAppleAssetsIfNeeded()
+            // Switching to Apple: a warm Whisper mic would otherwise stay on
+            // (and capture in parallel) until its window expires.
+            if settings.transcriptionEngine == .apple {
+                DictationController.shared.releaseWarmMicNow()
+            }
+        }
         .onChange(of: settings.language) { preinstallAppleAssetsIfNeeded() }
         .onChange(of: settings.appleDictationModel) { preinstallAppleAssetsIfNeeded() }
     }

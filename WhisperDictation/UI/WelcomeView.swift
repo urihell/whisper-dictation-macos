@@ -46,9 +46,19 @@ struct WelcomeView: View {
                     detail: "The first time, macOS asks for Microphone and Accessibility access. Allow both — without them the app can’t hear you or type for you."
                 )
                 step(
+                    icon: "arrow.down.circle",
+                    title: "The first dictation downloads a model",
+                    detail: "One time only, and it needs internet — the HUD shows the progress (“Downloading… / Optimizing…”), so a slow first run is normal, not stuck. After that, everything runs offline and starts instantly."
+                )
+                step(
                     icon: "lock.fill",
                     title: "100% on your Mac",
                     detail: "Speech is transcribed on-device and typed straight in. Your audio and text never leave your computer."
+                )
+                step(
+                    icon: "slider.horizontal.3",
+                    title: "Make it yours",
+                    detail: "Open Settings (⌘, from the menu bar icon) for languages, engines, per-app behavior, custom vocabulary, and spoken punctuation like “comma” and “new line”."
                 )
             }
             .padding(.horizontal, 28)
@@ -94,7 +104,7 @@ struct WelcomeView: View {
         let action = settings.doubleTapEnabled
             ? "double-tap \(triggerName)"
             : "press \(triggerName)"
-        return "From any app, \(action), speak, then \(stopHint). Your words type in right at the cursor."
+        return "From any app, \(action), speak, then \(stopHint). Your words type in right at the cursor. Press Escape anytime to cancel and discard."
     }
 
     private var stopHint: String {

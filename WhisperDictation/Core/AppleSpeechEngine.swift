@@ -95,7 +95,7 @@ final class AppleSpeechEngine: DictationEngine {
         // alongside the module and started only after the guards below pass.
         let module: any SpeechModule
         let localeID: String
-        let startResultsPump: () -> Void
+        let startResultsPump: () -> Task<Void, Never>
         if AppSettings.shared.appleDictationModel {
             guard let locale = await DictationTranscriber.supportedLocale(equivalentTo: Locale(identifier: language)) else {
                 throw AppleSpeechEngineError.localeUnsupported
@@ -110,8 +110,8 @@ final class AppleSpeechEngine: DictationEngine {
             module = dictation
             localeID = locale.identifier
             startResultsPump = { [weak self] in
-                guard let self else { return }
-                self.resultsTask = self.startPump(dictation.results, token: token) {
+                guard let self else { return Task {} }
+                return self.startPump(dictation.results, token: token) {
                     (String($0.text.characters), $0.isFinal)
                 }
             }
@@ -128,8 +128,8 @@ final class AppleSpeechEngine: DictationEngine {
             module = transcriber
             localeID = locale.identifier
             startResultsPump = { [weak self] in
-                guard let self else { return }
-                self.resultsTask = self.startPump(transcriber.results, token: token) {
+                guard let self else { return Task {} }
+                return self.startPump(transcriber.results, token: token) {
                     (String($0.text.characters), $0.isFinal)
                 }
             }
@@ -172,10 +172,20 @@ final class AppleSpeechEngine: DictationEngine {
         self.analyzer = analyzer
 
         // Results pump: volatile → live HUD; final → transcript + cleanup feed.
-        startResultsPump()
+        let pump = startResultsPump()
+        resultsTask = pump
 
         try await analyzer.start(inputSequence: inputStream)
-        guard token == currentSession else { return }
+        guard token == currentSession else {
+            // Superseded while the analyzer was starting. Tear down the
+            // LOCALS only — self's engine state may already belong to a newer
+            // session by now. Everything here is idempotent, so this is safe
+            // even if a newer session's defensive forceStop() ran first.
+            continuation.finish()
+            pump.cancel()
+            Task { await analyzer.cancelAndFinishNow() }
+            return
+        }
 
         // Same device + voice-processing policy as the Whisper path; never
         // warm-idle (nothing here has a cold start worth amortizing). A
@@ -229,7 +239,20 @@ final class AppleSpeechEngine: DictationEngine {
             do { try await analyzer.finalizeAndFinishThroughEndOfInput() }
             catch { Log.error("AppleSpeech: finalize failed: \(error.localizedDescription)") }
         }
-        await resultsTask?.value
+        // BOUNDED drain: if the session was stopped while start() was still
+        // mid-setup, the results stream may never terminate — an unbounded
+        // await here left the app stuck in "Transcribing…" forever. Normal
+        // sessions end the stream in milliseconds; the watchdog only fires
+        // in the pathological case, returning whatever was finalized.
+        if let pump = resultsTask {
+            let watchdog = Task {
+                try? await Task.sleep(nanoseconds: 3_000_000_000)
+                Log.error("AppleSpeech: results stream didn't end after finalize (~3s) — cancelling drain (stopped mid-start?).")
+                pump.cancel()
+            }
+            await pump.value
+            watchdog.cancel()
+        }
         resultsTask = nil
         analyzer = nil
         invalidBefore = currentSession   // block any stragglers from now on
@@ -272,6 +295,9 @@ final class AppleSpeechEngine: DictationEngine {
                     let (text, isFinal) = extract(result)
                     await MainActor.run { self?.ingest(text: text, isFinal: isFinal, token: token) }
                 }
+            } catch is CancellationError {
+                // Session torn down mid-stream (forceStop, or the stop()
+                // drain watchdog) — expected, not an error.
             } catch {
                 Log.error("AppleSpeech: results stream error: \(error.localizedDescription)")
                 await MainActor.run {

@@ -266,6 +266,12 @@ final class DictationController: ObservableObject {
         // A pending warm-window release is now moot — this session will use (and
         // re-arm) the engine. Cancel it so it can't tear the mic down mid-session.
         cancelWarmRelease()
+        // An Apple-engine session runs its OWN capture; a warm Whisper VPIO
+        // engine left flowing would capture in parallel the whole session —
+        // double mic use, indicator stuck on, VPIO fighting the live path.
+        if sessionEngineKind == .apple, transcriber.isMicWarm {
+            releaseWarmMic(reason: "Apple engine session starting")
+        }
         // Tell the processor whether to keep the engine warm when this session
         // stops, per the user's setting. (The actual warm engine, if any, is
         // adopted instantly inside start() → startRecordingLive.) Whisper-only;
