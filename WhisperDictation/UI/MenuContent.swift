@@ -47,6 +47,10 @@ struct MenuContent: View {
             UpdateChecker.checkNow()
         }
 
+        Button("Copy Diagnostics Report") {
+            copyDiagnostics()
+        }
+
         Divider()
 
         Button("Quit Whisper Dictation") {
@@ -94,6 +98,26 @@ struct MenuContent: View {
                 window.makeKeyAndOrderFront(nil)
             }
         }
+    }
+
+    /// Copies a plain-text diagnostics report: app/OS versions, key settings,
+    /// and the in-memory log tail. Exists because the unified log redacts our
+    /// messages as <private> (deliberately — no transcript can leak into
+    /// Console), which also blinds remote debugging. The tail contains no
+    /// dictated text by design, and export is explicit and user-initiated.
+    private func copyDiagnostics() {
+        let build = (Bundle.main.infoDictionary?["CFBundleVersion"] as? String) ?? "?"
+        var report = [
+            "WhisperDictation \(Self.appVersion) (build \(build))",
+            "macOS \(ProcessInfo.processInfo.operatingSystemVersionString)",
+            "engine=\(settings.transcriptionEngine.rawValue) dictationModel=\(settings.appleDictationModel) model=\(settings.modelName) language=\(settings.language) warmup=\(settings.micWarmUp.rawValue) cleanup=\(settings.cleanupEnabled)",
+            "--- recent log (\(Log.recentLines().count) lines) ---",
+        ]
+        report += Log.recentLines()
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(report.joined(separator: "\n"), forType: .string)
+        OverlayController.shared.toast("✓ Diagnostics copied — paste it anywhere")
     }
 
     /// Prompts for Accessibility and opens the System Settings pane so the user

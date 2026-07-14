@@ -195,8 +195,53 @@ struct SettingsView: View {
                 Text("Mandarin").tag("zh")
             }
 
+            Section("Backup") {
+                HStack {
+                    Button("Export Settings…", action: exportSettings)
+                    Button("Import Settings…", action: importSettings)
+                }
+                Text("Moves everything — vocabulary, replacements, per-app profiles, all preferences — to another Mac via a JSON file. Machine-specific microphone identities stay out; the key-combo shortcut must be re-recorded (a single-key trigger transfers).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
         .padding()
+    }
+
+    private func exportSettings() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "WhisperDictation Settings.json"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try SettingsPorter.exportData().write(to: url)
+            OverlayController.shared.toast("✓ Settings exported")
+        } catch {
+            Log.error("Settings export failed: \(error.localizedDescription)")
+            OverlayController.shared.toast("⚠️ Couldn't export settings")
+        }
+    }
+
+    private func importSettings() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.json]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url,
+              let data = try? Data(contentsOf: url) else { return }
+        do {
+            try SettingsPorter.apply(data)
+            // Imported settings can change the trigger, warm-up policy, and
+            // engine/model — rewire the pieces that don't watch settings live.
+            HotkeyManager.shared.reconfigure()
+            DictationController.shared.warmUpSettingChanged()
+            DictationController.shared.preloadModel()
+            preinstallAppleAssetsIfNeeded()
+            OverlayController.shared.toast("✓ Settings imported")
+        } catch {
+            Log.error("Settings import failed: \(error.localizedDescription)")
+            OverlayController.shared.toast("⚠️ Couldn't import — not a valid settings file")
+        }
     }
 
     /// Per-app overrides tab: one section per configured app, each field
