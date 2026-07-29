@@ -42,9 +42,11 @@ enum Log {
         private var lines: [String] = []
         private let capacity = 300
 
+        // Includes the date: a time-only stamp made multi-day reports read as
+        // jumping backwards (16:30 → 09:20) with no sign a day had passed.
         private static let stamp: DateFormatter = {
             let f = DateFormatter()
-            f.dateFormat = "HH:mm:ss.SSS"
+            f.dateFormat = "MM-dd HH:mm:ss.SSS"
             return f
         }()
 

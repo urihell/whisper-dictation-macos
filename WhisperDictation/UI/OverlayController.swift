@@ -90,6 +90,17 @@ final class OverlayController {
 
     func show() {
         hideGeneration += 1   // invalidate any in-flight hide completion
+        // The panel is cached for the app's lifetime (deliberately — its view
+        // graph must never tear down, see HUDLiveState). But a window object
+        // can be orphaned by the window server across sleep/wake or a display
+        // reconfiguration: it still answers isVisible == true while belonging
+        // to no screen, and ordering it front does nothing you can see. Detect
+        // that up front and rebuild rather than animating a ghost.
+        if let existing = panel, !Self.isHealthy(existing) {
+            Log.error("HUD: cached panel unhealthy before show (\(Self.describe(existing))) — rebuilding.")
+            existing.orderOut(nil)
+            panel = nil
+        }
         let panel = panel ?? makePanel()
         self.panel = panel
         reposition(panel)
@@ -98,6 +109,10 @@ final class OverlayController {
         guard !reduceMotion else {
             panel.alphaValue = 1
             panel.orderFrontRegardless()
+            // Backstop applies here too — the previous version scheduled it
+            // only on the animated path, so a Mac with Reduce Motion enabled
+            // had no backstop at all (and logged nothing when the HUD failed).
+            scheduleVisibilityBackstop()
             return
         }
 
@@ -117,23 +132,45 @@ final class OverlayController {
     /// Pending post-show visibility verification; cancelled by hide().
     private var visibilityCheck: DispatchWorkItem?
 
-    /// Field reports of "dictation started but no HUD" (single screen, no
-    /// fullscreen) that no constructible show/hide race explains. Backstop:
-    /// shortly after show() — past the 0.22s fade — verify the panel really
-    /// is on screen at full alpha while a session is active. If not, log the
-    /// exact window state (the diagnosis for the next report) and force it
-    /// visible (the user is never left dictating blind, whatever the cause).
+    /// Whether the panel is genuinely presented to the user. `isVisible` and
+    /// `alphaValue` alone are NOT enough: a window can report both while
+    /// belonging to no screen (`screen == nil` — orphaned across sleep/wake or
+    /// a display change), while sized zero (SwiftUI laid out to nothing), or
+    /// while positioned outside every screen. Each of those is an invisible
+    /// HUD that the old check waved through without a word.
+    private static func isHealthy(_ panel: NSPanel) -> Bool {
+        guard panel.isVisible, panel.alphaValue >= 0.9 else { return false }
+        let frame = panel.frame
+        guard frame.width > 1, frame.height > 1 else { return false }
+        guard panel.screen != nil else { return false }
+        return NSScreen.screens.contains { $0.frame.intersects(frame) }
+    }
+
+    private static func describe(_ panel: NSPanel) -> String {
+        let onScreen = NSScreen.screens.contains { $0.frame.intersects(panel.frame) }
+        return "visible=\(panel.isVisible) alpha=\(panel.alphaValue) frame=\(NSStringFromRect(panel.frame)) screen=\(panel.screen == nil ? "nil" : "set") intersectsAScreen=\(onScreen) occlusion=\(panel.occlusionState.rawValue) screens=\(NSScreen.screens.count)"
+    }
+
+    /// Verify shortly after show() — past the 0.22s fade — that the HUD really
+    /// reached the user while a session is active. On failure, log the full
+    /// window state (the field fingerprint) and REBUILD the panel: an orphaned
+    /// window can't be rescued by ordering it front again, which is why the
+    /// previous force-to-front backstop could heal nothing and say nothing.
     private func scheduleVisibilityBackstop() {
         visibilityCheck?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self, let panel = self.panel else { return }
             guard DictationController.shared.isActive else { return }
-            if !panel.isVisible || panel.alphaValue < 0.9 {
-                Log.error("HUD backstop: panel not presented after show() — visible=\(panel.isVisible), alpha=\(panel.alphaValue), frame=\(NSStringFromRect(panel.frame)), occlusion=\(panel.occlusionState.rawValue), screens=\(NSScreen.screens.count). Forcing to front.")
-                self.reposition(panel)
-                panel.alphaValue = 1
-                panel.orderFrontRegardless()
-            }
+            guard !Self.isHealthy(panel) else { return }
+            Log.error("HUD backstop: panel not presented after show() — \(Self.describe(panel)). Rebuilding.")
+            panel.orderOut(nil)
+            self.panel = nil
+            let fresh = self.makePanel()
+            self.panel = fresh
+            self.reposition(fresh)
+            fresh.alphaValue = 1
+            fresh.orderFrontRegardless()
+            Log.info("HUD backstop: rebuilt panel — \(Self.describe(fresh))")
         }
         visibilityCheck = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
