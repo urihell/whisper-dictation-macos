@@ -177,3 +177,8 @@
 - **Not the cause here, but latent:** KeyboardShortcuts' `isMenuOpen` flag
   soft-unregisters all hotkeys while any NSMenu tracks; the controller also
   ignores presses in busy states. Neither is logged — add a log on triggerDown.
+
+## AVFAudio throws NSExceptions, not Swift errors (2026-11-04)
+- `installTap` with a 0 Hz / 0 ch format raises an ObjC exception → SIGABRT. It happens when the system default input changes mid-setup (USB/Continuity mic hot-plug, virtual device rebuild), even with "System default" selected.
+- A pre-flight format probe can't close the race. Wrap engine/tap setup in `ObjCExceptionCatcher` (`SelectableInputAudioProcessor.catchingAudioExceptions`) and retry once.
+- Diagnose: `/usr/bin/log show --predicate 'process == "WhisperDictation"'` around the crash, then look for `no object with given ID` / `device change from X to Y`.

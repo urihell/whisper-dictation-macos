@@ -119,7 +119,11 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
         // between sessions, and a warm engine stays pinned to the device it
         // was built on, so adopting across a device switch would silently
         // capture from the wrong mic. Mismatch tears down and rebuilds cold.
-        if isWarmIdle, isolationEngine != nil, voiceIsolationEnabled, device == isolationEngineDeviceID {
+        // Compare the RESOLVED device: with "System default" both sides are nil,
+        // which would adopt a warm engine still bound to the previous default
+        // after the user plugs in / switches to another mic.
+        let resolvedDevice = Self.resolvedInputDevice(device)
+        if isWarmIdle, isolationEngine != nil, voiceIsolationEnabled, resolvedDevice == isolationEngineDeviceID {
             isWarmIdle = false           // stop the idle cap before attaching the session
             clearBuffersLocked()         // drop idle pre-roll; safe vs the still-firing tap
             isolationCallback = callback
@@ -128,7 +132,12 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
         }
         // A warm engine exists but this session doesn't want VPIO (e.g. device
         // flipped to Bluetooth): discard it and take the plain path.
-        if isWarmIdle { teardownIsolationEngine() }
+        if isWarmIdle {
+            if resolvedDevice != isolationEngineDeviceID {
+                Log.info("Input device changed since the mic was warmed — rebuilding on the current mic.")
+            }
+            teardownIsolationEngine()
+        }
         guard voiceIsolationEnabled else {
             // Pre-flight the input format to turn a corrupted-TCC 0/0 format into a
             // catchable error instead of an uncatchable installTap crash — but ONLY
@@ -142,7 +151,7 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
             if !Self.isResolvedDeviceBluetooth(device) {
                 try Self.assertInputFormatUsable()
             }
-            try inner.startRecordingLive(inputDeviceID: device, callback: callback)
+            try startInnerGuarded { try self.inner.startRecordingLive(inputDeviceID: device, callback: callback) }
             return
         }
         do {
@@ -156,7 +165,7 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
             Log.error("Voice Isolation: engine failed to start (\(error)); falling back to plain capture.")
             teardownIsolationEngine()
             voiceIsolationEnabled = false   // reflect actual state on stop/resume
-            try inner.startRecordingLive(inputDeviceID: device, callback: callback)
+            try startInnerGuarded { try self.inner.startRecordingLive(inputDeviceID: device, callback: callback) }
         }
     }
 
@@ -176,7 +185,7 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
             if !Self.isResolvedDeviceBluetooth(device) {
                 try Self.assertInputFormatUsable()
             }
-            try inner.resumeRecordingLive(inputDeviceID: device, callback: callback)
+            try startInnerGuarded { try self.inner.resumeRecordingLive(inputDeviceID: device, callback: callback) }
             return
         }
         // Our engine is fully torn down on stop, so resume just rebuilds it.
@@ -187,7 +196,7 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
             Log.error("Voice Isolation: engine failed to resume (\(error)); falling back to plain capture.")
             teardownIsolationEngine()
             voiceIsolationEnabled = false
-            try inner.resumeRecordingLive(inputDeviceID: device, callback: callback)
+            try startInnerGuarded { try self.inner.resumeRecordingLive(inputDeviceID: device, callback: callback) }
         }
     }
 
@@ -201,17 +210,24 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
         // consistency with the warm paths.)
         clearBuffersLocked()
         isolationCallback = callback
-        try buildAndStartIsolationEngine(inputDeviceID: inputDeviceID)
+        try Self.catchingAudioExceptions { try buildAndStartIsolationEngine(inputDeviceID: inputDeviceID) }
     }
 
     /// Builds the Voice-Processing capture graph and starts the engine. Used by the
     /// immediate-start path (`startIsolatedRecording`).
     /// The device the current isolation engine was pinned to (nil = system
-    /// default). Read by the warm-adopt path to refuse cross-device adoption.
+    /// default, resolved to the default's live ID at build time). Read by the
+    /// warm-adopt path to refuse cross-device adoption.
     private(set) var isolationEngineDeviceID: DeviceID?
 
+    /// The device a capture would actually use: the explicit pick, else the
+    /// current system default input.
+    static func resolvedInputDevice(_ deviceID: DeviceID?) -> DeviceID? {
+        (deviceID ?? 0) != 0 ? deviceID : defaultInputDeviceID()
+    }
+
     private func buildAndStartIsolationEngine(inputDeviceID: DeviceID?) throws {
-        isolationEngineDeviceID = inputDeviceID
+        isolationEngineDeviceID = Self.resolvedInputDevice(inputDeviceID)
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
 
@@ -414,6 +430,55 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
     /// setup, so we pre-flight the very same format on a throwaway engine and turn
     /// an invalid one into a normal Swift error the caller already handles
     /// (surfaced via onStreamError → a visible failure, not a crash).
+    // MARK: - Audio-engine exception guard
+
+    /// AVFAudio raised an Objective-C exception (not a Swift error) while
+    /// building the capture graph.
+    struct AudioEngineException: LocalizedError {
+        let reason: String
+        var errorDescription: String? { "Audio engine exception: \(reason)" }
+    }
+
+    /// Runs `body`, turning an AVFAudio NSException into `AudioEngineException`.
+    ///
+    /// Why: `installTap` raises — uncatchable from Swift, so it aborts the app —
+    /// when the input node reports 0 Hz / 0 ch. That happens when the system
+    /// default input changes in the instant the engine is built (observed: the
+    /// default flipped to a device that vanished within the same millisecond
+    /// during a hot-plug / virtual-device rebuild). `assertInputFormatUsable`
+    /// can't close that window: it probes a throwaway engine moments earlier.
+    static func catchingAudioExceptions(_ body: () throws -> Void) throws {
+        var swiftError: Error?
+        do {
+            try ObjCExceptionCatcher.catchException {
+                do { try body() } catch { swiftError = error }
+            }
+        } catch {
+            throw AudioEngineException(reason: error.localizedDescription)
+        }
+        if let swiftError { throw swiftError }
+    }
+
+    /// Starts WhisperKit's capture under the exception guard. A device switch
+    /// settles within milliseconds, so retry once after a short pause; if that
+    /// also fails, surface a normal error (the session fails cleanly).
+    private func startInnerGuarded(_ start: () throws -> Void) throws {
+        do {
+            try Self.catchingAudioExceptions(start)
+        } catch let first as AudioEngineException {
+            Log.error("Mic start raised (\(first.reason)); input device likely changing — retrying once.")
+            Thread.sleep(forTimeInterval: 0.3)
+            do {
+                try Self.catchingAudioExceptions(start)
+            } catch let second as AudioEngineException {
+                Log.error("Mic start raised again (\(second.reason)); giving up for this session.")
+                throw WhisperError.audioProcessingFailed(
+                    "Microphone unavailable — the input device changed while starting. Try again."
+                )
+            }
+        }
+    }
+
     private static func assertInputFormatUsable() throws {
         let probe = AVAudioEngine()
         let format = probe.inputNode.outputFormat(forBus: 0)
