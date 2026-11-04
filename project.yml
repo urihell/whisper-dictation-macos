@@ -74,9 +74,11 @@ targets:
       - WhisperDictation/Core/VersionCompare.swift
       - WhisperDictation/Core/AppProfile.swift
       - WhisperDictation/Core/SettingsExport.swift
+      - WhisperDictation/Core/ModifierKey.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.udabby.WhisperDictationTests
+        GENERATE_INFOPLIST_FILE: YES
         SWIFT_VERSION: "5.0"
         CODE_SIGN_STYLE: Automatic
         CODE_SIGN_IDENTITY: "-"

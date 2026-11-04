@@ -7,7 +7,8 @@ extension KeyboardShortcuts.Name {
 }
 
 /// Wires the dictation trigger. Two styles, selectable in Settings:
-///   - Key combination → KeyboardShortcuts (modifier + key, or a function key).
+///   - Key combination → KeyboardShortcuts (modifier + key, or a function key),
+///     or a modifier-only shortcut (Right ⌥ alone, ⌘⌥…) → ModifierShortcutMonitor.
 ///   - Single key       → SingleKeyMonitor (one key, intercepted globally).
 /// Handlers branch on the current trigger mode at call time, so changing
 /// toggle/push-to-talk needs no rewiring.
@@ -26,6 +27,9 @@ final class HotkeyManager {
 
         KeyboardShortcuts.onKeyDown(for: .toggleDictation) {
             guard !AppSettings.shared.useSingleKey else { return }
+            // Logged so a "hotkey did nothing" report shows whether the press
+            // arrived at all, and whether a busy state swallowed it.
+            Log.info("Hotkey down (state=\(DictationController.shared.state))")
             DictationController.shared.triggerDown()
         }
 
@@ -50,9 +54,26 @@ final class HotkeyManager {
             } else {
                 SingleKeyMonitor.shared.stop()
             }
+            ModifierShortcutMonitor.shared.stop()
+        } else if !settings.modifierShortcut.isEmpty {
+            // Modifier-only shortcut replaces the combo. Unregister the combo so
+            // it doesn't also fire (or keep consuming its keystroke).
+            SingleKeyMonitor.shared.stop()
+            KeyboardShortcuts.disable(.toggleDictation)
+            let codes = Set(settings.modifierShortcut.map { UInt16(clamping: $0) })
+            ModifierShortcutMonitor.shared.start(modifiers: codes)
         } else {
             SingleKeyMonitor.shared.stop()
+            ModifierShortcutMonitor.shared.stop()
             KeyboardShortcuts.enable(.toggleDictation)
         }
+    }
+
+    /// Stop every trigger while the Settings recorder is capturing a new
+    /// shortcut, so pressing it doesn't start dictation. `reconfigure()` resumes.
+    func suspend() {
+        KeyboardShortcuts.disable(.toggleDictation)
+        SingleKeyMonitor.shared.stop()
+        ModifierShortcutMonitor.shared.stop()
     }
 }

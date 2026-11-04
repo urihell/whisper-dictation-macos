@@ -164,3 +164,16 @@
   SwiftUI TabView tabs surface as `buttons of toolbar 1 of window 1` (NOT an AX
   tab group). ALWAYS verify the harness actually performed the action (assert
   window count > 0) before trusting a "no crash" result.
+
+## "Hotkey randomly stops working" = Secure Input + ⌥-only shortcut (2026-11-04)
+- **Symptom:** the ⌥/ key-combo hotkey (Carbon `RegisterEventHotKey` via
+  KeyboardShortcuts) intermittently does nothing, then recovers on its own.
+- **Root cause (confirmed live):** another app held macOS **Secure Event Input**
+  (here: Dia browser, PID from `kCGSSessionSecureInputPID`). While it's on, macOS
+  withholds hotkeys whose only modifier is ⌥ (or ⌥⇧). Quitting Dia cleared it and
+  ⌥/ worked immediately. The default ⌥Space is affected the same way.
+- **Check:** `ioreg -l -w 0 | grep -o '"kCGSSessionSecureInputPID"=[0-9]*'`
+  → a PID means Secure Input is on; `ps -p <pid>` names the holder.
+- **Not the cause here, but latent:** KeyboardShortcuts' `isMenuOpen` flag
+  soft-unregisters all hotkeys while any NSMenu tracks; the controller also
+  ignores presses in busy states. Neither is logged — add a log on triggerDown.

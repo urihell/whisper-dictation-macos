@@ -222,6 +222,12 @@ final class AppSettings: ObservableObject {
     @Published var singleKeyLabel: String {
         didSet { defaults.set(singleKeyLabel, forKey: Keys.singleKeyLabel) }
     }
+    /// Key-combination mode only: a modifier-only shortcut (key codes, e.g.
+    /// [61] = Right ⌥, [55, 58] = Left ⌘ + Left ⌥). When non-empty it replaces
+    /// the KeyboardShortcuts combo. Empty = use the combo.
+    @Published var modifierShortcut: [Int] {
+        didSet { defaults.set(modifierShortcut, forKey: Keys.modifierShortcut) }
+    }
 
     /// Custom vocabulary — terms seeded into the recognizer's prompt so names,
     /// jargon, and acronyms are transcribed correctly.
@@ -286,6 +292,7 @@ final class AppSettings: ObservableObject {
         submitSendsReturn = defaults.object(forKey: Keys.submitSendsReturn) as? Bool ?? true
         singleKeyCode = defaults.object(forKey: Keys.singleKeyCode) as? Int ?? -1
         singleKeyLabel = defaults.string(forKey: Keys.singleKeyLabel) ?? ""
+        modifierShortcut = (defaults.array(forKey: Keys.modifierShortcut) as? [Int]) ?? []
         vocabularyTerms = defaults.stringArray(forKey: Keys.vocabularyTerms) ?? []
         vocabularyBiasing = defaults.object(forKey: Keys.vocabularyBiasing) as? Bool ?? false
         replacements = (defaults.dictionary(forKey: Keys.replacements) as? [String: String]) ?? [:]
@@ -318,6 +325,7 @@ final class AppSettings: ObservableObject {
         static let submitSendsReturn = "submitSendsReturn"
         static let singleKeyCode = "singleKeyCode"
         static let singleKeyLabel = "singleKeyLabel"
+        static let modifierShortcut = "modifierShortcut"
         static let vocabularyTerms = "vocabularyTerms"
         static let vocabularyBiasing = "vocabularyBiasing"
         static let replacements = "replacements"

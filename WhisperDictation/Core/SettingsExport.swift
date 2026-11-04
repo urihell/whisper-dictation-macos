@@ -9,7 +9,8 @@ import Foundation
 /// UID and per-profile microphone UIDs reference Core Audio devices that
 /// don't exist on another Mac (the exporter strips profile mic overrides).
 /// The KeyboardShortcuts key-combo also doesn't travel (it lives in the
-/// library's own storage); the single-key trigger does.
+/// library's own storage); the single-key trigger and a modifier-only
+/// shortcut do.
 struct SettingsExport: Codable, Equatable {
     var formatVersion: Int = 1
 
@@ -18,6 +19,7 @@ struct SettingsExport: Codable, Equatable {
     var useSingleKey: Bool?
     var singleKeyCode: Int?
     var singleKeyLabel: String?
+    var modifierShortcut: [Int]?
     var submitSendsReturn: Bool?
 
     var transcriptionEngine: String?
