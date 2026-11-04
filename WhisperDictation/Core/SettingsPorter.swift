@@ -18,6 +18,7 @@ enum SettingsPorter {
         e.useSingleKey = s.useSingleKey
         e.singleKeyCode = s.singleKeyCode
         e.singleKeyLabel = s.singleKeyLabel
+        e.modifierShortcut = s.modifierShortcut
         e.submitSendsReturn = s.submitSendsReturn
         e.transcriptionEngine = s.transcriptionEngine.rawValue
         e.appleDictationModel = s.appleDictationModel
@@ -58,6 +59,7 @@ enum SettingsPorter {
         if let v = e.useSingleKey { s.useSingleKey = v }
         if let v = e.singleKeyCode { s.singleKeyCode = v }
         if let v = e.singleKeyLabel { s.singleKeyLabel = v }
+        if let v = e.modifierShortcut { s.modifierShortcut = v.filter { ModifierKey.isModifier(UInt16(clamping: $0)) } }
         if let v = e.submitSendsReturn { s.submitSendsReturn = v }
         if let v = e.transcriptionEngine.flatMap(TranscriptionEngine.init(rawValue:)) { s.transcriptionEngine = v }
         if let v = e.appleDictationModel { s.appleDictationModel = v }

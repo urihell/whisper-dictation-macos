@@ -555,7 +555,13 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else {
-                KeyboardShortcuts.Recorder("Dictation hotkey:", name: .toggleDictation)
+                LabeledContent("Dictation hotkey:") {
+                    ShortcutRecorder(settings: settings)
+                }
+                Text("Press a key combination (like ⌥/), or tap modifiers alone — Right ⌥ by itself, or ⌘⌥ together. A modifier-only shortcut fires only when nothing else is pressed with it, so ⌥ and ⌘ keep working normally in other shortcuts.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Toggle("Require double-tap to start", isOn: $settings.doubleTapEnabled)
