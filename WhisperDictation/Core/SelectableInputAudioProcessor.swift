@@ -517,14 +517,26 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
 
     /// Whether the system-default input reports a usable format right now.
     static func isDefaultInputFormatUsable() -> Bool {
-        let format = AVAudioEngine().inputNode.outputFormat(forBus: 0)
-        return format.sampleRate > 0 && format.channelCount > 0
+        inputFormatIsUsable(probeDefaultInputFormat())
+    }
+
+    /// Reads the default input's format from a throwaway engine.
+    ///
+    /// The engine must outlive the read: `inputNode` doesn't keep its engine
+    /// alive, and in optimized builds Swift may release an unused temporary
+    /// right after `.inputNode`, so `outputFormat(forBus:)` then reads a freed
+    /// node (EXC_BAD_ACCESS in AVAudioIONodeImpl::GetOutputFormat).
+    private static func probeDefaultInputFormat() -> AVAudioFormat {
+        let probe = AVAudioEngine()
+        return withExtendedLifetime(probe) { probe.inputNode.outputFormat(forBus: 0) }
+    }
+
+    private static func inputFormatIsUsable(_ format: AVAudioFormat) -> Bool {
+        format.sampleRate > 0 && format.channelCount > 0
     }
 
     private static func assertInputFormatUsable() throws {
-        let probe = AVAudioEngine()
-        let format = probe.inputNode.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0 else {
+        guard inputFormatIsUsable(probeDefaultInputFormat()) else {
             throw WhisperError.audioProcessingFailed(
                 "Microphone unavailable — check Microphone access in System Settings → Privacy & Security."
             )
