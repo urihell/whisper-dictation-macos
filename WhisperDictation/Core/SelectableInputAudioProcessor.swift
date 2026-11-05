@@ -137,6 +137,9 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
                 Log.info("Input device changed since the mic was warmed — rebuilding on the current mic.")
             }
             teardownIsolationEngine()
+            // Drop the warm engine's idle audio. Left in place, it reads as "first
+            // buffer captured" and cues "speak now" before the new mic is live.
+            clearBuffersLocked()
         }
         guard voiceIsolationEnabled else {
             // Pre-flight the input format to turn a corrupted-TCC 0/0 format into a
@@ -336,15 +339,29 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
     /// Tears down our Voice-Processing engine if we own one. Mirrors
     /// AudioProcessor.stopRecording's thorough graph teardown so repeated
     /// start/stop cycles don't leak input connections.
+    /// Holds a torn-down engine for a second so late audio-unit callbacks
+    /// never reach a freed object (see `teardownIsolationEngine`).
+    private static func retainBriefly(_ engine: AVAudioEngine) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { _ = engine }
+    }
+
     private func teardownIsolationEngine() {
         guard let engine = isolationEngine else { return }
         engine.inputNode.removeTap(onBus: 0)
         engine.attachedNodes.forEach { $0.removeTap(onBus: 0) }
-        // Turn Voice Processing back off so the node/device returns to normal.
-        try? engine.inputNode.setVoiceProcessingEnabled(false)
-        engine.disconnectNodeInput(engine.inputNode)
         engine.stop()
+        engine.disconnectNodeInput(engine.inputNode)
         engine.reset()
+        // Do NOT call setVoiceProcessingEnabled(false) here. The engine is being
+        // discarded, so it buys nothing, and toggling it makes AVFAudio rebuild
+        // the VP audio unit while a property listener from the old one is still
+        // queued (AVAudioIOUnit::IOUnitPropertyListener on the
+        // AUVoiceProcessingIO queue). That listener then hits freed memory, an
+        // EXC_BAD_ACCESS crash seen twice on a USB mic (Shure MV7+) where VPIO
+        // delivers no audio and gets torn down right after starting. Also keep
+        // the engine alive for a moment so any late callback lands on a live
+        // object.
+        Self.retainBriefly(engine)
         isolationEngine = nil
         isolationCallback = nil
         isolationEngineDeviceID = nil
@@ -459,24 +476,49 @@ final class SelectableInputAudioProcessor: AudioProcessing, @unchecked Sendable 
         if let swiftError { throw swiftError }
     }
 
-    /// Starts WhisperKit's capture under the exception guard. A device switch
-    /// settles within milliseconds, so retry once after a short pause; if that
-    /// also fails, surface a normal error (the session fails cleanly).
+    /// Starts WhisperKit's capture under the exception guard, retrying while the
+    /// input device settles. A hot-plug settles within milliseconds, but tearing
+    /// down a Voice Processing aggregate (the VPIO → plain fallback) leaves the
+    /// input reporting 0 Hz for longer: 0.3s was observed to be too short on a
+    /// USB mic. Back off over ~1.5s total, then surface a normal error.
+    static let guardedStartRetryDelays: [TimeInterval] = [0.2, 0.4, 0.9]
+
     private func startInnerGuarded(_ start: () throws -> Void) throws {
-        do {
-            try Self.catchingAudioExceptions(start)
-        } catch let first as AudioEngineException {
-            Log.error("Mic start raised (\(first.reason)); input device likely changing — retrying once.")
-            Thread.sleep(forTimeInterval: 0.3)
+        var lastReason = ""
+        for (attempt, delay) in ([0] + Self.guardedStartRetryDelays).enumerated() {
+            if delay > 0 { Thread.sleep(forTimeInterval: delay) }
             do {
                 try Self.catchingAudioExceptions(start)
-            } catch let second as AudioEngineException {
-                Log.error("Mic start raised again (\(second.reason)); giving up for this session.")
-                throw WhisperError.audioProcessingFailed(
-                    "Microphone unavailable — the input device changed while starting. Try again."
-                )
+                if attempt > 0 { Log.info("Mic start succeeded on retry \(attempt).") }
+                return
+            } catch let error as AudioEngineException {
+                lastReason = error.reason
+                Log.error("Mic start raised (\(error.reason)); input device likely changing — attempt \(attempt + 1).")
+            } catch let error as WhisperError where Self.isTransientFormatError(error) {
+                // Same 0 Hz / 0 ch condition, caught by WhisperKit's own guard
+                // ("Failed to create node format") before installTap could raise.
+                lastReason = error.localizedDescription
+                Log.error("Mic start failed (\(lastReason)); input device likely changing — attempt \(attempt + 1).")
             }
         }
+        Log.error("Mic start kept failing (\(lastReason)); giving up for this session.")
+        throw WhisperError.audioProcessingFailed(
+            "Microphone unavailable — the input device changed while starting. Try again."
+        )
+    }
+
+    /// WhisperKit errors that mean "the input reports no usable format right
+    /// now". These are transient while a device switch or a Voice Processing
+    /// teardown settles.
+    static func isTransientFormatError(_ error: WhisperError) -> Bool {
+        guard case .audioProcessingFailed(let message) = error else { return false }
+        return message.contains("node format") || message.contains("audio converter")
+    }
+
+    /// Whether the system-default input reports a usable format right now.
+    static func isDefaultInputFormatUsable() -> Bool {
+        let format = AVAudioEngine().inputNode.outputFormat(forBus: 0)
+        return format.sampleRate > 0 && format.channelCount > 0
     }
 
     private static func assertInputFormatUsable() throws {

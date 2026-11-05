@@ -168,3 +168,41 @@ final class MicUsageMonitor {
         return pid
     }
 }
+
+/// Fires when the system default input device changes (for example, you pick
+/// another mic in System Settings or plug one in). The controller uses it to
+/// release a warm Voice-Processing engine right away, while you're not
+/// dictating. Otherwise the next dictation would tear the warm engine down at
+/// start, and the new mic reports no usable format for ~1.5s while that
+/// teardown settles (seen switching MacBook mic → USB mic).
+@MainActor
+final class DefaultInputWatcher {
+    var onChange: (() -> Void)?
+    private var block: AudioObjectPropertyListenerBlock?
+
+    private static func address() -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+    }
+
+    /// Begin watching for the app's lifetime. Safe to call twice.
+    func start() {
+        guard block == nil else { return }
+        let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
+            // Delivered on DispatchQueue.main (passed below).
+            MainActor.assumeIsolated { self?.onChange?() }
+        }
+        var addr = Self.address()
+        let status = AudioObjectAddPropertyListenerBlock(
+            AudioObjectID(kAudioObjectSystemObject), &addr, DispatchQueue.main, listener
+        )
+        guard status == noErr else {
+            Log.error("DefaultInputWatcher: couldn't add listener (\(status)).")
+            return
+        }
+        block = listener
+    }
+}
