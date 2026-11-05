@@ -379,6 +379,22 @@ struct SettingsView: View {
                 .fixedSize(horizontal: false, vertical: true)
             }
 
+            if let upgrading = transcriber.neuralEngineUpgradeModel,
+               let since = transcriber.neuralEngineUpgradeSince {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Optimizing \(DictationController.friendlyModelName(upgrading)) for the Neural Engine in the background — dictation uses the GPU until it's ready. This repeats after app updates.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text("Elapsed \(Self.elapsed(since, to: context.date))")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                }
+            }
+
             Text("Models download on first use and are cached on-device. Larger models are more accurate but slower and use more memory. The first load of a large model can take a few minutes to compile (one-time); you can keep dictating with the current model meanwhile. For non-English (e.g. Hebrew), use Large v3 Turbo or larger — and set a specific Language below rather than Auto-detect.")
                 .font(.caption)
                 .foregroundStyle(.secondary)

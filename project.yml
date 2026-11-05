@@ -76,6 +76,8 @@ targets:
       - WhisperDictation/Core/AppProfile.swift
       - WhisperDictation/Core/SettingsExport.swift
       - WhisperDictation/Core/ModifierKey.swift
+      - WhisperDictation/Core/NeuralEngineUpgradePlan.swift
+      - WhisperDictation/Core/VPIOFailurePolicy.swift
       - WhisperDictation/Support/ObjCExceptionCatcher.m
     settings:
       base:

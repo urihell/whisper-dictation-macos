@@ -549,6 +549,17 @@ final class DictationController: ObservableObject {
         return m
     }()
 
+    /// Releases a warm mic as soon as the system default input changes, so a
+    /// switch between mics never pays the warm engine's teardown at dictation start.
+    private lazy var defaultInputWatcher: DefaultInputWatcher = {
+        let w = DefaultInputWatcher()
+        w.onChange = { [weak self] in
+            guard let self, self.state == .idle, self.transcriber.isMicWarm else { return }
+            self.releaseWarmMic(reason: "system input device changed")
+        }
+        return w
+    }()
+
     /// After a session ends, release the warm engine when the configured window
     /// elapses — unless another dictation starts first (which cancels this). Also
     /// starts watching for other apps grabbing the mic, to release early.
@@ -556,6 +567,7 @@ final class DictationController: ObservableObject {
     private func armWarmReleaseIfNeeded() {
         cancelWarmRelease()
         guard transcriber.isMicWarm else { return } // nothing warm (e.g. Bluetooth / off)
+        defaultInputWatcher.start()
         guard let window = AppSettings.shared.micWarmUp.window else {
             // .always — keep warm indefinitely, but still yield to other mic users.
             micUsageMonitor.start()

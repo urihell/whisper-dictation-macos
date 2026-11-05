@@ -4,6 +4,7 @@
 # Build artifacts
 build/
 build_release/
+build_test/
 DerivedData/
 .swiftpm/
 *.xcuserstate

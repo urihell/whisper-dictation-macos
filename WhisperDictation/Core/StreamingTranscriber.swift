@@ -157,31 +157,42 @@ final class StreamingTranscriber: ObservableObject {
     var isLoaded: Bool { whisperKit != nil }
 
     /// Builds (and downloads/compiles if needed) a WhisperKit for `modelName`.
-    private func makeWhisperKit(_ modelName: String) async throws -> WhisperKit {
+    /// Loads on the GPU unless `onNeuralEngine` — a Neural-Engine model is first
+    /// loaded on the GPU and upgraded in the background (see
+    /// `NeuralEngineUpgradePlan`). `reportsProgress` false keeps a background
+    /// upgrade from driving the foreground download/optimize UI.
+    private func makeWhisperKit(
+        _ modelName: String,
+        onNeuralEngine: Bool = false,
+        reportsProgress: Bool = true
+    ) async throws -> WhisperKit {
         let base = Self.modelDownloadBase()
-        Log.info("Loading model '\(modelName)' (downloads on first use) into \(base.path)…")
+        Log.info("Loading model '\(modelName)' on \(onNeuralEngine ? "Neural Engine" : "GPU") (downloads on first use) into \(base.path)…")
         // Download (or resolve a cached copy) explicitly so we can surface real
         // progress — first-run downloads are large and otherwise look frozen. An
         // already-downloaded model resolves near-instantly (progress jumps to 1).
-        loadProgress = 0
+        if reportsProgress { loadProgress = 0 }
         do {
             _ = try await WhisperKit.download(
                 variant: modelName,
                 downloadBase: base
             ) { [weak self] progress in
+                guard reportsProgress else { return }
                 let fraction = progress.fractionCompleted
                 Task { @MainActor in self?.loadProgress = fraction }
             }
         } catch {
-            loadProgress = nil
+            if reportsProgress { loadProgress = nil }
             throw error
         }
         // Download done; the remaining time is the one-time Core ML compile, which
         // reports no progress. Clear the determinate bar and mark the start of the
         // "optimizing" phase so the UI can show an indeterminate bar + elapsed time.
-        loadProgress = nil
-        optimizingSince = Date()
-        defer { optimizingSince = nil }
+        if reportsProgress {
+            loadProgress = nil
+            optimizingSince = Date()
+        }
+        defer { if reportsProgress { optimizingSince = nil } }
 
         // Load via model + downloadBase (the model is now cached from the pre-
         // download above, so WhisperKit's own setup resolves it instantly). This
@@ -196,13 +207,11 @@ final class StreamingTranscriber: ObservableObject {
         // cache (download + first ANE specialization is already slow) that made
         // first use painfully long. Fast first run matters more here than the
         // marginal peak-memory saving.
-        // Pick the compute backend for *this* model. GPU (Metal) is the per-model
-        // default: it loads in seconds. The Neural Engine is more power-efficient
-        // but the first load of a model on it triggers a one-time macOS
-        // optimization (multi-minute); the result is cached and reused after that.
-        let compute: MLComputeUnits = AppSettings.shared.computeBackend(for: modelName) == .gpu
-            ? .cpuAndGPU
-            : .cpuAndNeuralEngine
+        // GPU (Metal) loads in seconds. The Neural Engine is more power-efficient
+        // but its first load of a model triggers a macOS optimization (minutes)
+        // that's redone after every app update — so it's only ever loaded by the
+        // background upgrade, never on the path dictation waits for.
+        let compute: MLComputeUnits = onNeuralEngine ? .cpuAndNeuralEngine : .cpuAndGPU
         let computeOptions = ModelComputeOptions(
             audioEncoderCompute: compute,
             textDecoderCompute: compute
@@ -268,6 +277,7 @@ final class StreamingTranscriber: ObservableObject {
         if modelName == loadedModelName || modelName == loadingModel { return }
         Log.info("requestModel('\(modelName)') — loading in background")
         loadingModel = modelName
+        cancelNeuralEngineUpgrade()
         backgroundLoad?.cancel()
         backgroundLoad = Task { [weak self] in
             guard let self else { return }
@@ -277,9 +287,11 @@ final class StreamingTranscriber: ObservableObject {
                 self.whisperKit = wk
                 self.loadedModelName = modelName
                 self.loadedModel = modelName
+                self.loadedOnNeuralEngine = false
                 self.loadingModel = nil
                 Log.info("Switched active model to '\(modelName)'")
                 self.onModelReady?(modelName)
+                self.startNeuralEngineUpgradeIfWanted()
             } catch {
                 // A superseded/cancelled load (model switched again, or Cancel
                 // pressed) throws on its way out — that's not a failure. Don't
@@ -297,6 +309,17 @@ final class StreamingTranscriber: ObservableObject {
     /// effect on a reload. The active model stays usable until the reload lands.
     func reloadActiveModel() {
         let name = loadedModelName ?? loadingModel ?? AppSettings.shared.modelName
+        if name == loadedModelName, whisperKit != nil, loadingModel == nil {
+            let wantsANE = AppSettings.shared.computeBackend(for: name) == .neuralEngine
+            switch NeuralEngineUpgradePlan.onBackendChange(
+                wantsNeuralEngine: wantsANE, runningOnNeuralEngine: loadedOnNeuralEngine
+            ) {
+            case .startUpgrade: startNeuralEngineUpgradeIfWanted(); return
+            case .cancelUpgrade: cancelNeuralEngineUpgrade(); return
+            case .none: return
+            case .reload: break
+            }
+        }
         // Clear the guards so requestModel doesn't treat this as a no-op.
         loadedModelName = nil
         loadingModel = nil
@@ -314,12 +337,91 @@ final class StreamingTranscriber: ObservableObject {
             whisperKit = wk
             loadedModelName = desired
             loadedModel = desired
+            loadedOnNeuralEngine = false
+            startNeuralEngineUpgradeIfWanted()
         } else if loadedModelName != desired {
             requestModel(desired)
         }
     }
 
     private static func modelDownloadBase() -> URL { ModelManager.downloadBase }
+
+    // MARK: - Neural Engine background upgrade
+
+    /// The active model whose Neural Engine copy is being built in the
+    /// background while its GPU copy serves dictation; nil otherwise.
+    @Published private(set) var neuralEngineUpgradeModel: String?
+    /// When that background build began (drives the elapsed timer in Settings).
+    @Published private(set) var neuralEngineUpgradeSince: Date?
+    /// Whether the active `whisperKit` runs on the Neural Engine (vs GPU).
+    private var loadedOnNeuralEngine = false
+    private var upgradeTask: Task<Void, Never>?
+    /// A finished ANE copy waiting for the current session to end.
+    private var pendingUpgrade: (model: String, kit: WhisperKit)?
+
+    /// If the active model is set to the Neural Engine but running on the GPU,
+    /// build its ANE copy in the background. Safe to call repeatedly.
+    private func startNeuralEngineUpgradeIfWanted() {
+        guard let name = loadedModelName, !loadedOnNeuralEngine,
+              AppSettings.shared.computeBackend(for: name) == .neuralEngine else { return }
+        if neuralEngineUpgradeModel == name { return }   // already building
+        cancelNeuralEngineUpgrade()
+        neuralEngineUpgradeModel = name
+        neuralEngineUpgradeSince = Date()
+        Log.info("Neural Engine: optimizing '\(name)' in the background; dictating on GPU meanwhile.")
+        upgradeTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let kit = try await self.makeWhisperKit(name, onNeuralEngine: true, reportsProgress: false)
+                guard !Task.isCancelled, self.neuralEngineUpgradeModel == name else { return }
+                let secs = Int(Date().timeIntervalSince(self.neuralEngineUpgradeSince ?? Date()))
+                Log.info("Neural Engine: '\(name)' ready after \(secs)s.")
+                self.pendingUpgrade = (name, kit)
+                self.adoptNeuralEngineUpgradeIfIdle()
+            } catch {
+                if error is CancellationError || Task.isCancelled { return }
+                Log.error("Neural Engine: background optimize of '\(name)' failed (\(error.localizedDescription)); staying on GPU.")
+                if self.neuralEngineUpgradeModel == name {
+                    self.neuralEngineUpgradeModel = nil
+                    self.neuralEngineUpgradeSince = nil
+                }
+            }
+        }
+    }
+
+    /// Drop any in-flight or finished-but-unadopted ANE build. The system's
+    /// compile may run on to completion; we just stop waiting for it.
+    private func cancelNeuralEngineUpgrade() {
+        upgradeTask?.cancel()
+        upgradeTask = nil
+        pendingUpgrade = nil
+        neuralEngineUpgradeModel = nil
+        neuralEngineUpgradeSince = nil
+    }
+
+    /// Swap the finished ANE copy in — only between sessions (no live stream).
+    /// Called when the build finishes and again at every session start.
+    private func adoptNeuralEngineUpgradeIfIdle() {
+        guard let pending = pendingUpgrade,
+              NeuralEngineUpgradePlan.canAdopt(
+                upgradeModel: pending.model,
+                activeModel: loadedModelName,
+                sessionRunning: streamer != nil
+              ) else { return }
+        // Carry the processor setting over and release the old copy's warm mic,
+        // so the old engine doesn't keep the microphone open.
+        let oldProc = whisperKit?.audioProcessor as? SelectableInputAudioProcessor
+        let keepWarm = oldProc?.keepWarmOnStop ?? false
+        oldProc?.releaseWarmEngine()
+        (pending.kit.audioProcessor as? SelectableInputAudioProcessor)?.keepWarmOnStop = keepWarm
+        whisperKit = pending.kit
+        loadedOnNeuralEngine = true
+        pendingUpgrade = nil
+        upgradeTask = nil
+        neuralEngineUpgradeModel = nil
+        neuralEngineUpgradeSince = nil
+        Log.info("Neural Engine: switched '\(pending.model)' from GPU to Neural Engine.")
+    }
 
     /// Cancels an in-flight background model load. Note: the underlying download
     /// may stop, but an ANE compile already in progress can run to completion in
@@ -372,7 +474,7 @@ final class StreamingTranscriber: ObservableObject {
         // straight to plain capture (instant start) until the device changes or the
         // window elapses, after which VPIO is tried again automatically.
         if engage, isVPIOInCooldown(for: device) {
-            Log.info("Voice processing skipped — cooldown active after a recent init failure for this device.")
+            Log.info("Voice processing skipped — it recently failed on this mic.")
             engage = false
         }
         proc.voiceIsolationEnabled = engage
@@ -384,30 +486,32 @@ final class StreamingTranscriber: ObservableObject {
     /// The device resolved for the current/last session (nil = system default),
     /// captured so a VPIO failure can be attributed to the right device.
     private var lastResolvedDevice: DeviceID?
-    /// When the active VPIO cooldown expires, or nil if none.
-    private var vpioCooldownUntil: Date?
-    /// The device the cooldown applies to (so switching mics retries VPIO at once).
-    private var vpioCooldownDevice: DeviceID?
-    /// How long to skip VPIO after an init failure before retrying.
-    private static let vpioCooldownWindow: TimeInterval = 30
+    /// Per-device VPIO failure memory (in-memory only; a relaunch retries).
+    private var vpioFailures = VPIOFailurePolicy()
 
-    /// Whether VPIO is in cooldown for `device` right now. Self-expiring.
-    private func isVPIOInCooldown(for device: DeviceID?) -> Bool {
-        guard let until = vpioCooldownUntil else { return false }
-        if Date() >= until {
-            vpioCooldownUntil = nil
-            vpioCooldownDevice = nil
-            return false
-        }
-        return vpioCooldownDevice == device
+    /// The persistent UID of the device a session actually captures from
+    /// (resolving "System default"), or nil if it can't be determined.
+    private func resolvedDeviceUID(_ device: DeviceID?) -> (id: DeviceID, uid: String)? {
+        guard let id = SelectableInputAudioProcessor.resolvedInputDevice(device),
+              let uid = SelectableInputAudioProcessor.deviceUID(for: id) else { return nil }
+        return (id, uid)
     }
 
-    /// Start (or extend) the VPIO cooldown for `device` after an init failure.
+    /// Whether VPIO should be skipped for `device` right now.
+    private func isVPIOInCooldown(for device: DeviceID?) -> Bool {
+        guard let resolved = resolvedDeviceUID(device) else { return false }
+        return vpioFailures.shouldSkip(device: resolved.uid)
+    }
+
+    /// Record a VPIO failure for `device` (cooldown, then off until relaunch).
     private func armVPIOCooldown(for device: DeviceID?) {
-        guard vpioCooldownUntil == nil || vpioCooldownDevice != device else { return }
-        vpioCooldownDevice = device
-        vpioCooldownUntil = Date().addingTimeInterval(Self.vpioCooldownWindow)
-        Log.info("Voice processing entering \(Int(Self.vpioCooldownWindow))s cooldown after init failure.")
+        guard let resolved = resolvedDeviceUID(device) else { return }
+        switch vpioFailures.recordFailure(device: resolved.uid) {
+        case .coolingDown(let window):
+            Log.info("Voice processing entering \(Int(window))s cooldown after init failure.")
+        case .disabledUntilRelaunch:
+            Log.info("Voice processing failed again on this mic — leaving it off until relaunch.")
+        }
     }
 
     /// The human-readable name of the input device a session would actually
@@ -443,6 +547,7 @@ final class StreamingTranscriber: ObservableObject {
         sessionToken += 1
         let token = sessionToken
 
+        adoptNeuralEngineUpgradeIfIdle()
         try await ensureUsableModel(desired: AppSettings.shared.modelName)
 
         // If the session was stopped/cancelled while the model was loading (e.g.
@@ -489,7 +594,7 @@ final class StreamingTranscriber: ObservableObject {
         if let proc = whisperKit.audioProcessor as? SelectableInputAudioProcessor {
             let engage = configureVoiceProcessing(on: proc)
             voiceIsolationActive = engage
-            Log.info("Voice processing \(engage ? "ON (built-in/wired mic)" : "OFF (Bluetooth self-isolates)") for this session.")
+            Log.info("Voice processing \(engage ? "ON (built-in/wired mic)" : "OFF (Bluetooth, or skipped after a failure)") for this session.")
         }
 
         launchStreamer(whisperKit: whisperKit, tokenizer: tokenizer, options: options, token: token)
@@ -532,8 +637,30 @@ final class StreamingTranscriber: ObservableObject {
         proc.voiceIsolationEnabled = false // plain capture for the relaunch
         voiceIsolationActive = false
         whisperKit.audioProcessor.purgeAudioSamples(keepingLast: 0)
+        // The VPIO engine just torn down keeps its device busy for a moment. A
+        // plain engine opened in that window sees a 0 Hz / 0 ch input and the
+        // session dies ("Failed to create node format"). Wait for the input to
+        // report a usable format first.
+        await waitForUsableInput(token: token)
+        guard token == sessionToken else { return }
         launchStreamer(whisperKit: whisperKit, tokenizer: tokenizer, options: options, token: token)
         // Plain capture starts immediately (no VPIO convergence) — no second wait.
+    }
+
+    /// Polls (up to ~4s) until the input reports a usable format, the session
+    /// is superseded, or time runs out. Covers the window while a released
+    /// VPIO engine still holds the device.
+    private func waitForUsableInput(token: Int) async {
+        let start = Date()
+        for poll in 0..<40 {
+            guard token == sessionToken else { return }
+            if SelectableInputAudioProcessor.isDefaultInputFormatUsable() {
+                if poll > 0 { Log.info("Input usable again after \(Int(Date().timeIntervalSince(start) * 1000))ms.") }
+                return
+            }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        Log.error("Input still reports no usable format after ~4s; starting anyway.")
     }
 
     /// Builds the `AudioStreamTranscriber` and starts its run loop for the current
@@ -642,6 +769,9 @@ final class StreamingTranscriber: ObservableObject {
     /// Stops streaming and returns the cleaned final transcript.
     func stop() async -> String {
         sessionToken += 1   // supersede any start() still awaiting its model load
+        // A Neural Engine copy that finished mid-session swaps in once this
+        // session is fully done with the current copy (after the tail decode).
+        defer { adoptNeuralEngineUpgradeIfIdle() }
         // Stop the stream BEFORE reading the audio: stopRecording() snapshots the
         // complete session audio the instant capture ends (`samplesAtStop`), so
         // the tail re-decode below includes the final buffers instead of missing
